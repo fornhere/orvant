@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Local project records CLI. One writer; no concurrent-writer guarantee."""
+"""Local project records CLI; cooperating Linux writers use an advisory lock."""
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +19,7 @@ import core
 
 
 REQUIRED = ("state.json", "CONTEXT.md", "integration.md", "scripts/project.py", "scripts/core.py")
+RUNTIME_FILES = ("core.py", "project.py", "ontology.py", "acceptance.py")
 INTEGRATION = """# Proje çalışma kaydı
 
 Bu projeye devam ederken önce `.project/state.json` dosyasını oku.
@@ -26,11 +30,15 @@ python3 .project/scripts/project.py context .
 ```
 
 Yetkili kayıt `.project/state.json`; `.project/CONTEXT.md` türetilen görünümdür.
+Şema 3 ontolojisi ve somut kayıtlar için `python3 .project/scripts/project.py
+ontology .` çalıştır; `.project/ONTOLOJİ.md` bunun üretilmiş görünümüdür.
 Görev/karar değişikliklerini `.project/scripts/project.py apply` ile, okuduğun
 revizyonu `--expected-revision` olarak belirterek işle. Komut seçenekleri için
 `python3 .project/scripts/project.py --help` kullan.
 Önerileri kabul edilmiş karar sayma. Kontrol başarısını kullanıcı kabulü sayma.
-Bu prototip tek yazan süreç içindir; paralel durum yazımı yapma.
+Değişimin etkisini yazmadan görmek için `preview . --event <eylem.json>
+--expected-revision <revizyon>` kullan. CLI yazıcıları Linux kilidiyle sıraya
+girer; kayıt dosyasına dışarıdan veya elle paralel durum yazımı yapma.
 """
 
 
@@ -75,8 +83,15 @@ def read_json(path: Path) -> dict:
     normal_file(path)
     def reject_constant(value: str) -> None:
         raise ValueError(f"Invalid JSON constant: {value}")
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate JSON key: {key}")
+            result[key] = value
+        return result
     with path.open(encoding="utf-8") as handle:
-        value = json.load(handle, parse_constant=reject_constant)
+        value = json.load(handle, parse_constant=reject_constant, object_pairs_hook=unique_object)
     if not isinstance(value, dict):
         raise ValueError(f"Expected JSON object: {path}")
     return value
@@ -108,6 +123,30 @@ def json_text(value: dict) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
 
 
+@contextlib.contextmanager
+def writer_lock(value: str):
+    """Serialize CLI writers for one lexical project root without changing its tree.
+
+    Locks are advisory Linux flock locks, not authentication. The directory is
+    private to this OS user; a process crash releases the held descriptor.
+    """
+    root = os.path.abspath(os.path.expanduser(value))
+    no_symlink(Path(root))
+    directory = Path(tempfile.gettempdir()) / f"proje-baslat-locks-{os.getuid()}"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    no_symlink(directory)
+    info = directory.stat()
+    if not directory.is_dir() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("Writer lock directory must be private and owned by current user")
+    name = hashlib.sha256(root.encode()).hexdigest() + ".lock"
+    descriptor = os.open(directory / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def load_project(root: Path, *, complete: bool = False) -> dict:
     folder = root / ".project"
     no_symlink(folder)
@@ -119,10 +158,13 @@ def load_project(root: Path, *, complete: bool = False) -> dict:
     required = REQUIRED if complete else ("state.json", "scripts/project.py", "scripts/core.py")
     for relative in required:
         normal_file(folder / relative)
-    for relative in ("CONTEXT.md", "integration.md"):
+    for relative in ("CONTEXT.md", "ONTOLOJİ.md", "integration.md", "scripts/ontology.py", "scripts/acceptance.py"):
         optional_file(folder / relative)
     state = read_json(folder / "state.json")
     core.validate(state)
+    if complete and state["schema_version"] == 3:
+        normal_file(folder / "scripts" / "ontology.py")
+        normal_file(folder / "scripts" / "acceptance.py")
     return state
 
 
@@ -162,8 +204,8 @@ def initialize(args: argparse.Namespace) -> int:
 
     spec = read_json(Path(os.path.abspath(args.spec)))
     core.validate(spec)
-    if spec["schema_version"] not in (1, 2) or spec["revision"] != 0 or spec["history"] != []:
-        raise ValueError("Initial spec requires schema_version=1 or 2, revision=0, history=[]")
+    if spec["schema_version"] not in (1, 2, 3) or spec["revision"] != 0 or spec["history"] != []:
+        raise ValueError("Initial spec requires schema_version=1, 2 or 3, revision=0, history=[]")
     if any(task["status"] != "todo" or task["evidence"] for task in spec["tasks"]):
         raise ValueError("Initial tasks must be todo with empty evidence")
     if any(decision["status"] not in ("proposed", "accepted") for decision in spec["decisions"]):
@@ -174,19 +216,22 @@ def initialize(args: argparse.Namespace) -> int:
         ):
             raise ValueError("Initial accepted decision requires accepted_by and source")
     source = Path(__file__).resolve().parent
-    for name in ("project.py", "core.py"):
+    for name in RUNTIME_FILES:
         normal_file(source / name)
     # Render and validate before creating the destination root or staging files.
     context = core.render_context(spec, root)
+    ontology_view = core.render_ontology(spec, root) if spec["schema_version"] == 3 else None
     root.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".project-stage-", dir=root))
     committed = False
     try:
         write_new(stage / "state.json", json_text(spec))
         write_new(stage / "CONTEXT.md", context)
+        if ontology_view is not None:
+            write_new(stage / "ONTOLOJİ.md", ontology_view)
         write_new(stage / "integration.md", INTEGRATION)
         (stage / "scripts").mkdir()
-        for name in ("project.py", "core.py"):
+        for name in RUNTIME_FILES:
             shutil.copyfile(source / name, stage / "scripts" / name)
         # This precondition is not a lock: callers must serialize writers.
         if folder.exists() or folder.is_symlink():
@@ -222,9 +267,9 @@ def write_new_bytes(path: Path, content: bytes) -> None:
 
 
 def upgrade_command(args: argparse.Namespace) -> int:
-    """Replace the runtime pair, preserving state and a permanent original backup.
+    """Replace runtime files, preserving state and permanent original backups.
 
-    One writer only. Each replacement is atomic, but the pair is not: caught
+    One writer only. Each replacement is atomic, but the whole set is not: caught
     installation errors trigger best-effort restoration. A process interruption
     can require manual restoration from the reported backup directory.
     """
@@ -233,13 +278,14 @@ def upgrade_command(args: argparse.Namespace) -> int:
     source = Path(os.path.abspath(__file__)).parent
     no_symlink(source)
     destination = root / ".project" / "scripts"
-    names = ("core.py", "project.py")
+    names = RUNTIME_FILES
     incoming = {}
     previous = {}
     for name in names:
         normal_file(source / name)
         incoming[name] = (source / name).read_bytes()
-        previous[name] = (destination / name).read_bytes()
+        optional_file(destination / name)
+        previous[name] = (destination / name).read_bytes() if (destination / name).exists() else None
     common = {"root": str(root), "revision": state["revision"], "state_changed": False}
     if incoming == previous:
         emit({"ok": True, "result": "noop", "backup": None, **common})
@@ -255,20 +301,26 @@ def upgrade_command(args: argparse.Namespace) -> int:
     stage = None
     replaced = []
     try:
-        # Preserve both originals before replacing either file. Never execute
+        # Preserve all originals before replacing any file. Never execute
         # the target project's potentially obsolete runtime to read its data.
         for name in names:
-            write_new_bytes(backup / name, previous[name])
+            if previous[name] is not None:
+                write_new_bytes(backup / name, previous[name])
+        write_new(backup / "manifest.json", json_text({"files": {
+            name: {"previously_present": previous[name] is not None} for name in names}}))
         write_new(backup / "README.txt",
                   "Original runtime before upgrade. With no project writer running, "
-                  "restore BOTH core.py and project.py to ../../scripts/. "
+                  "restore BOTH core.py and project.py; for ontology.py and acceptance.py, "
+                  "restore each only if manifest.json says previously_present; otherwise remove it. "
+                  "Destination: ../../scripts/. "
                   "state.json was not changed by this upgrade.\n")
         stage = Path(tempfile.mkdtemp(prefix=".runtime-stage-", dir=folder))
         for name in names:
             write_new_bytes(stage / name, incoming[name])
-            write_new_bytes(stage / (name + ".restore"), previous[name])
+            if previous[name] is not None:
+                write_new_bytes(stage / (name + ".restore"), previous[name])
         for name in names:
-            normal_file(destination / name)
+            optional_file(destination / name)
             os.replace(stage / name, destination / name)
             replaced.append(name)
     except (OSError, ValueError) as error:
@@ -276,12 +328,16 @@ def upgrade_command(args: argparse.Namespace) -> int:
         for name in reversed(replaced):
             try:
                 normal_file(destination / name)
-                os.replace(stage / (name + ".restore"), destination / name)
+                if previous[name] is None:
+                    (destination / name).unlink()
+                else:
+                    os.replace(stage / (name + ".restore"), destination / name)
             except (OSError, ValueError) as restore_error:
                 restore_errors.append(f"{name}: {restore_error}")
         emit({"ok": False, "result": "restore_failed" if restore_errors else "restored",
               "backup": str(backup), "error": str(error), "restore_errors": restore_errors,
-              "recovery": "Stop project writers and restore BOTH runtime files from the backup."
+              "recovery": "Stop project writers and restore BOTH original runtime files, then restore "
+                          "or remove ontology.py and acceptance.py according to the backup manifest."
                           if restore_errors else "Previous runtime preserved; retry upgrade after fixing the error.",
               **common})
         return 1
@@ -297,6 +353,14 @@ def inspect_command(args: argparse.Namespace) -> int:
     root = root_path(args.root)
     state = load_project(root)
     report = core.inspect_state(state, root)
+    if args.command == "ontology":
+        if args.json:
+            emit({"schema_version": state["schema_version"], "revision": state["revision"],
+                  **{key: report.get(key, state.get(key)) for key in
+                     ("ontology", "objects", "relations", "tasks", "object_status")}})
+        else:
+            print(core.render_ontology(state, root), end="")
+        return 0
     view_warnings = []
     if not (root / ".project" / "CONTEXT.md").exists():
         view_warnings.append("CONTEXT.md is missing; live context is computed from state.json.")
@@ -323,26 +387,57 @@ def apply_command(args: argparse.Namespace) -> int:
     event = read_json(Path(os.path.abspath(args.event)))
     next_state = core.apply_event(state, event, root)
     core.validate(next_state)
+    observed_digest = core.preview_digest(state, event, root, next_state)
+    if getattr(args, "preview_digest", None) and args.preview_digest != observed_digest:
+        raise ValueError("Preview digest conflict: state, event or referenced files changed; preview again")
     folder = root / ".project"
     # Compute the view before committing, so semantic/render errors cannot partially apply.
     context = core.render_context(next_state, root)
+    ontology_view = core.render_ontology(next_state, root) if next_state["schema_version"] == 3 else None
+    if core.preview_digest(state, event, root) != observed_digest:
+        raise ValueError("Files changed during apply; preview again")
+    backup = None
+    if event.get("action") == "migrate_ontology":
+        backups = folder / "migration-backups"
+        no_symlink(backups)
+        backups.mkdir(exist_ok=True)
+        backup = Path(tempfile.mkdtemp(prefix=f"revision-{state['revision']}-", dir=backups))
+        write_new_bytes(backup / "state.json", (folder / "state.json").read_bytes())
+        write_new(backup / "README.txt", "State before ontology migration. Stop writers before "
+                  "restoring state.json; use a runtime compatible with its schema.\n")
     atomic_write(folder / "state.json", json_text(next_state))
     try:
         atomic_write(folder / "CONTEXT.md", context)
+        if ontology_view is not None:
+            atomic_write(folder / "ONTOLOJİ.md", ontology_view)
     except (OSError, ValueError) as error:
         emit({"ok": False, "result": "state_committed_view_failed", "state_committed": True,
               "revision": next_state["revision"], "error": str(error),
+              "backup": str(backup) if backup else None,
               "recovery": "Do not retry this event. Read current state with the context command."})
         return 1
     emit({"ok": True, "result": "applied", "state_committed": True,
+          "backup": str(backup) if backup else None,
           "revision": next_state["revision"], "action": event.get("action")})
+    return 0
+
+
+def preview_command(args: argparse.Namespace) -> int:
+    root = root_path(args.root)
+    state = load_project(root)
+    if state["revision"] != args.expected_revision:
+        raise ValueError(f"Revision conflict: expected {args.expected_revision}, current {state['revision']}")
+    event = read_json(Path(os.path.abspath(args.event)))
+    report = core.preview_event(state, event, root)
+    emit({**report, "ok": True, "result": "previewed", "state_committed": False,
+          "revision": state["revision"]})
     return 0
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
-    init = commands.add_parser("init", help="Initialize from a v1/v2 spec; preserve existing records")
+    init = commands.add_parser("init", help="Initialize from a v1/v2/v3 spec; preserve existing records")
     init.add_argument("root")
     init.add_argument("--spec", required=True)
     upgrade = commands.add_parser("upgrade", help="Upgrade copied runtime from this source package; serialize writers")
@@ -352,22 +447,30 @@ def parser() -> argparse.ArgumentParser:
     context = commands.add_parser("context", help="Read current context, recomputing evidence state")
     context.add_argument("root")
     context.add_argument("--json", action="store_true")
+    ontology = commands.add_parser("ontology", help="Read ontology definitions and live object context")
+    ontology.add_argument("root")
+    ontology.add_argument("--json", action="store_true")
+    preview = commands.add_parser("preview", help="Validate an event and inspect its impact without writing")
+    preview.add_argument("root")
+    preview.add_argument("--event", required=True)
+    preview.add_argument("--expected-revision", type=int, required=True)
     apply = commands.add_parser("apply", help="Apply one event; caller must serialize writers")
     apply.add_argument("root")
     apply.add_argument("--event", required=True)
     apply.add_argument("--expected-revision", type=int, required=True)
+    apply.add_argument("--preview-digest", help="Require the exact state/event/file observations from preview")
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.command == "init":
-            return initialize(args)
-        if args.command == "apply":
-            return apply_command(args)
-        if args.command == "upgrade":
-            return upgrade_command(args)
+        if args.command in {"init", "apply", "upgrade"}:
+            with writer_lock(args.root):
+                return {"init": initialize, "apply": apply_command,
+                        "upgrade": upgrade_command}[args.command](args)
+        if args.command == "preview":
+            return preview_command(args)
         return inspect_command(args)
     except (ValueError, OSError, TypeError, KeyError) as error:
         emit({"ok": False, "result": "error", "error": str(error)})

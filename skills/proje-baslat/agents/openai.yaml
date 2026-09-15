@@ -1,4 +1,4 @@
 interface:
   display_name: "Proje Başlat"
-  short_description: "AI projesini kur, kararlarını ve sonraki işi netleştir"
-  default_prompt: "$proje-baslat ile fikrimi hedefleri, görevleri ve kararları belli bir projeye dönüştür."
+  short_description: "Projeyi nesne, ilişki ve kanıtlarıyla kur ve sürdür"
+  default_prompt: "$proje-baslat ile projemin somut nesnelerini, ilişkilerini ve görevlerini modelle; ilk işi ve değişiklik etkilerini görünür kıl."
