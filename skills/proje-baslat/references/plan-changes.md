@@ -135,7 +135,7 @@ Dört dosya topluca atomik değildir; süreç kesilirse yazıcıları durdur, ma
 göre eski dosyaları geri koy ve önceden bulunmayan ontology.py/acceptance.py dosyalarını kaldır. Uyumlu
 runtime olmadan yeni şema state'ini eski betikle açmaya çalışma.
 
-CLI işlemleri Linux advisory lock ile sıraya girer; bu kilit doğrudan/elle dosya
+CLI işlemleri işletim sistemi advisory lock ile sıraya girer; bu kilit doğrudan/elle dosya
 editörünü engellemez. Alt ajanlar bulgularını ana yazıcıya getirmelidir.
 
 ## Şema 1/2 → 3 ontoloji migrasyonu

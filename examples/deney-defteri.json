@@ -1,0 +1,1079 @@
+{
+  "schema_version": 3,
+  "revision": 0,
+  "project": {
+    "id": "deney-defteri",
+    "name": "Deney Defteri",
+    "goal": "Forn ve başka AI kullanıcılarının denemelerini komut, çıktı ve değerlendirmeyle kaydetmesini; iki deneyi karşılaştırıp ne öğrendiğini bulmasını sağlamak.",
+    "audience": "Forn ve AI araçlarını deneyerek öğrenen insanlar",
+    "scope": [
+      "Deney ekleme ve geçmiş deneyleri açma",
+      "Deneye metin veya çıktı dosyası bağlama",
+      "İki deneyi aynı ölçütlerle yan yana karşılaştırma",
+      "İlk kullanılabilir sürümü gerçek kullanıcı denemesiyle değerlendirme"
+    ],
+    "out_of_scope": [
+      "İlk iş paketinde otomatik model çağırma ve otomatik puanlama",
+      "İlk iş paketinde sosyal akış ve herkese açık deney havuzu"
+    ],
+    "constraints": [
+      "Kullanıcının kendi deney sonucu ile örnek/kurmaca veri açıkça ayrılır",
+      "Başarı iddiaları kayıtlı çıktı ve değerlendirmeye dayanır"
+    ],
+    "open_questions": [
+      "İlk uygulama tarayıcıda mı, masaüstünde mi çalışacak; veriler nerede saklanacak?",
+      "Başkalarının yararlanması kendi defterini kullanmakla mı, seçilmiş deneyleri paylaşmakla mı başlayacak?",
+      "Dışa aktarma ve yayınlama ilk sürüme eklenecek mi?"
+    ]
+  },
+  "objects": [
+    {
+      "id": "defter",
+      "type": "product",
+      "label": "Deney Defteri",
+      "properties": {
+        "amac": "Forn ve başka AI kullanıcılarının denemelerini komut, çıktı ve değerlendirmeyle kaydetmesini; iki deneyi karşılaştırıp ne öğrendiğini bulmasını sağlamak."
+      }
+    },
+    {
+      "id": "akis",
+      "type": "deliverable",
+      "label": "Kullanım taslağı",
+      "properties": {
+        "aciklama": "İlk kullanım akışı",
+        "dosya": "ÜRÜN-TASLAĞI.md"
+      }
+    },
+    {
+      "id": "ornek-belgesi",
+      "type": "deliverable",
+      "label": "Örnek karşılaştırma belgesi",
+      "properties": {
+        "aciklama": "Kurmaca A/B anlatımı",
+        "dosya": "ÖRNEK-KARŞILAŞTIRMA.md"
+      }
+    },
+    {
+      "id": "model-ornek",
+      "type": "model",
+      "label": "Kurmaca örnek model",
+      "properties": {
+        "ad": "Çalıştırılmamış örnek model",
+        "kurmaca": true,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "komut-a",
+      "type": "prompt",
+      "label": "Genel komut",
+      "properties": {
+        "metin": "AI deneylerini kaydetmekle ilgili bir video için tek cümlelik açılış yaz.",
+        "kurmaca": true,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "komut-b",
+      "type": "prompt",
+      "label": "Somut sorun komutu",
+      "properties": {
+        "metin": "AI deneylerini kaydetmekle ilgili video için tek cümlelik açılış yaz. Dün işe yarayan komutu bugün sohbet geçmişinde bulamama sorununu açıkça anlat.",
+        "kurmaca": true,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "olcut-somut",
+      "type": "criterion",
+      "label": "Somut sorun",
+      "properties": {
+        "tanim": "Cümle kaybolan bir komut veya deney sonucunu açıkça anlatır."
+      }
+    },
+    {
+      "id": "olcut-tek",
+      "type": "criterion",
+      "label": "Tek cümle",
+      "properties": {
+        "tanim": "Açılış bir cümleyle sınırlıdır."
+      }
+    },
+    {
+      "id": "mimari",
+      "type": "deliverable",
+      "label": "Veri ve çalışma ortamı tasarımı",
+      "properties": {
+        "aciklama": "Planlanan çıktı; henüz üretilmedi."
+      }
+    },
+    {
+      "id": "kayit-modulu",
+      "type": "deliverable",
+      "label": "Deney kayıt akışı",
+      "properties": {
+        "aciklama": "Planlanan çıktı; henüz üretilmedi."
+      }
+    },
+    {
+      "id": "karsilastirma-modulu",
+      "type": "deliverable",
+      "label": "Karşılaştırma akışı",
+      "properties": {
+        "aciklama": "Planlanan çıktı; henüz üretilmedi."
+      }
+    },
+    {
+      "id": "teknik-kontrol",
+      "type": "deliverable",
+      "label": "Teknik doğrulama",
+      "properties": {
+        "aciklama": "Planlanan çıktı; henüz üretilmedi."
+      }
+    },
+    {
+      "id": "kullanici-denemesi",
+      "type": "deliverable",
+      "label": "Gerçek kullanıcı değerlendirmesi",
+      "properties": {
+        "aciklama": "Planlanan çıktı; henüz üretilmedi."
+      }
+    },
+    {
+      "id": "deney-a",
+      "type": "experiment",
+      "label": "Kurmaca Deney A",
+      "properties": {
+        "amac": "AI deneylerini kaydetme videosuna somut tek cümlelik açılış",
+        "kurmaca": true,
+        "calistirildi": false,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "cikti-a",
+      "type": "artifact",
+      "label": "Kurmaca çıktı A",
+      "properties": {
+        "metin": "Bugün yapay zekâyla öğrenme yolculuğumuzu daha düzenli hâle getiriyoruz.",
+        "kurmaca": true,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "deger-a-somut",
+      "type": "evaluation",
+      "label": "Değerlendirme A / somut",
+      "properties": {
+        "karsiliyor": false,
+        "gerekce": "Örnek metin kaybolan bir komuttan söz etmiyor.",
+        "kurmaca": true
+      }
+    },
+    {
+      "id": "deger-a-tek",
+      "type": "evaluation",
+      "label": "Değerlendirme A / tek",
+      "properties": {
+        "karsiliyor": true,
+        "gerekce": "Örnek metin ölçütteki koşulu karşılıyor.",
+        "kurmaca": true
+      }
+    },
+    {
+      "id": "deney-b",
+      "type": "experiment",
+      "label": "Kurmaca Deney B",
+      "properties": {
+        "amac": "AI deneylerini kaydetme videosuna somut tek cümlelik açılış",
+        "kurmaca": true,
+        "calistirildi": false,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "cikti-b",
+      "type": "artifact",
+      "label": "Kurmaca çıktı B",
+      "properties": {
+        "metin": "Dün işe yarayan komutu bugün sohbet geçmişinde bulamıyorsan, deneylerini kaydetmenin zamanı gelmiş.",
+        "kurmaca": true,
+        "surum": "kurmaca-v1"
+      }
+    },
+    {
+      "id": "deger-b-somut",
+      "type": "evaluation",
+      "label": "Değerlendirme B / somut",
+      "properties": {
+        "karsiliyor": true,
+        "gerekce": "Örnek metin ölçütteki koşulu karşılıyor.",
+        "kurmaca": true
+      }
+    },
+    {
+      "id": "deger-b-tek",
+      "type": "evaluation",
+      "label": "Değerlendirme B / tek",
+      "properties": {
+        "karsiliyor": true,
+        "gerekce": "Örnek metin ölçütteki koşulu karşılıyor.",
+        "kurmaca": true
+      }
+    },
+    {
+      "id": "karsilastirma-ab",
+      "type": "comparison",
+      "label": "Kurmaca A/B karşılaştırması",
+      "properties": {
+        "sonuc": "Bu örnekte B iki ölçütü, A yalnız tek cümle ölçütünü karşılıyor. Gerçek model performansı iddiası değildir.",
+        "kurmaca": true
+      }
+    }
+  ],
+  "relations": [
+    {
+      "id": "model-a",
+      "type": "model_for",
+      "from": "model-ornek",
+      "to": "deney-a"
+    },
+    {
+      "id": "komut-a",
+      "type": "prompt_for",
+      "from": "komut-a",
+      "to": "deney-a"
+    },
+    {
+      "id": "uretim-a",
+      "type": "produces",
+      "from": "deney-a",
+      "to": "cikti-a"
+    },
+    {
+      "id": "deney-kars-a",
+      "type": "compares_run",
+      "from": "deney-a",
+      "to": "karsilastirma-ab"
+    },
+    {
+      "id": "cikti-deger-a-somut",
+      "type": "evaluated_by",
+      "from": "cikti-a",
+      "to": "deger-a-somut"
+    },
+    {
+      "id": "olcut-deger-a-somut",
+      "type": "criterion_for",
+      "from": "olcut-somut",
+      "to": "deger-a-somut"
+    },
+    {
+      "id": "kars-deger-a-somut",
+      "type": "contributes",
+      "from": "deger-a-somut",
+      "to": "karsilastirma-ab"
+    },
+    {
+      "id": "cikti-deger-a-tek",
+      "type": "evaluated_by",
+      "from": "cikti-a",
+      "to": "deger-a-tek"
+    },
+    {
+      "id": "olcut-deger-a-tek",
+      "type": "criterion_for",
+      "from": "olcut-tek",
+      "to": "deger-a-tek"
+    },
+    {
+      "id": "kars-deger-a-tek",
+      "type": "contributes",
+      "from": "deger-a-tek",
+      "to": "karsilastirma-ab"
+    },
+    {
+      "id": "model-b",
+      "type": "model_for",
+      "from": "model-ornek",
+      "to": "deney-b"
+    },
+    {
+      "id": "komut-b",
+      "type": "prompt_for",
+      "from": "komut-b",
+      "to": "deney-b"
+    },
+    {
+      "id": "uretim-b",
+      "type": "produces",
+      "from": "deney-b",
+      "to": "cikti-b"
+    },
+    {
+      "id": "deney-kars-b",
+      "type": "compares_run",
+      "from": "deney-b",
+      "to": "karsilastirma-ab"
+    },
+    {
+      "id": "cikti-deger-b-somut",
+      "type": "evaluated_by",
+      "from": "cikti-b",
+      "to": "deger-b-somut"
+    },
+    {
+      "id": "olcut-deger-b-somut",
+      "type": "criterion_for",
+      "from": "olcut-somut",
+      "to": "deger-b-somut"
+    },
+    {
+      "id": "kars-deger-b-somut",
+      "type": "contributes",
+      "from": "deger-b-somut",
+      "to": "karsilastirma-ab"
+    },
+    {
+      "id": "cikti-deger-b-tek",
+      "type": "evaluated_by",
+      "from": "cikti-b",
+      "to": "deger-b-tek"
+    },
+    {
+      "id": "olcut-deger-b-tek",
+      "type": "criterion_for",
+      "from": "olcut-tek",
+      "to": "deger-b-tek"
+    },
+    {
+      "id": "kars-deger-b-tek",
+      "type": "contributes",
+      "from": "deger-b-tek",
+      "to": "karsilastirma-ab"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-AKIS",
+      "title": "İlk kullanım akışını ve örnek karşılaştırmayı hazırla",
+      "status": "todo",
+      "object_ids": [
+        "defter",
+        "akis",
+        "ornek-belgesi"
+      ],
+      "depends_on": [],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Ürün taslağı hedef kullanıcıyı, üç temel işlemi ve açık ürün kararlarını ayırır.",
+        "İki açıkça kurmaca deney aynı amaç ve iki ortak ölçütle, komutları ve somut çıktılarıyla gösterilir.",
+        "Taslak deney ekleme → çıktı bağlama → değerlendirme → karşılaştırma akışını ve ilk sürüm kabul senaryosunu açıklar."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "defter"
+      ],
+      "output_ids": [
+        "akis",
+        "ornek-belgesi"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": [],
+      "output_snapshot": null,
+      "support_snapshot": null
+    },
+    {
+      "id": "T-MIMARI",
+      "title": "Çalışma ortamını ve veri saklama yaklaşımını seç",
+      "status": "todo",
+      "object_ids": [
+        "defter",
+        "akis",
+        "karsilastirma-ab",
+        "mimari"
+      ],
+      "depends_on": [
+        "T-AKIS"
+      ],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Çalışma ortamı, saklama ve dosya bağlama yaklaşımı gerekçeli kararlarla kaydedilmiş; kullanıcı tercihi ve ajan kararı ayrılmıştır.",
+        "Kayıt kimliği, zorunlu alanlar, veri kalıcılığı ve bozuk/eksik dosya davranışı yazılmıştır."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "defter",
+        "akis",
+        "karsilastirma-ab"
+      ],
+      "output_ids": [
+        "mimari"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": []
+    },
+    {
+      "id": "T-KAYIT",
+      "title": "Deney ekleme, açma ve çıktı bağlama akışını uygula",
+      "status": "todo",
+      "object_ids": [
+        "mimari",
+        "kayit-modulu"
+      ],
+      "depends_on": [
+        "T-MIMARI"
+      ],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Kullanıcı iki deney oluşturabilir, komut ve değerlendirme kaydedebilir; yeniden açınca kayıtlar korunur.",
+        "Bir metin çıktısı ve bir dosya çıktısı doğru deneye bağlanır; eksik dosya ve eksik zorunlu alan anlaşılır biçimde gösterilir."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "mimari"
+      ],
+      "output_ids": [
+        "kayit-modulu"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": []
+    },
+    {
+      "id": "T-KARSILASTIR",
+      "title": "İki deneyi ortak ölçütlerle karşılaştır",
+      "status": "todo",
+      "object_ids": [
+        "mimari",
+        "kayit-modulu",
+        "karsilastirma-modulu"
+      ],
+      "depends_on": [
+        "T-KAYIT"
+      ],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Seçilen iki deneyin komut, araç/model, çıktı ve değerlendirmeleri yan yana görülebilir.",
+        "Ölçüt eksikliği veya amaç farkı görünürdür; uygulama kendiliğinden kazanan ilan etmez."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "mimari",
+        "kayit-modulu"
+      ],
+      "output_ids": [
+        "karsilastirma-modulu"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": []
+    },
+    {
+      "id": "T-DOGRULA",
+      "title": "İlk sürümün kayıt ve karşılaştırma akışını doğrula",
+      "status": "todo",
+      "object_ids": [
+        "kayit-modulu",
+        "karsilastirma-modulu",
+        "teknik-kontrol"
+      ],
+      "depends_on": [
+        "T-KARSILASTIR"
+      ],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "İki deney kaydetme, çıktı açma, yeniden açınca veriyi bulma ve karşılaştırma senaryosu gerçekten çalıştırılıp sonuçları kaydedilir.",
+        "Eksik alan ve kayıp dosya senaryoları çalıştırılır; test raporuyla ilgili uygulama dosyaları kanıta bağlanır."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "kayit-modulu",
+        "karsilastirma-modulu"
+      ],
+      "output_ids": [
+        "teknik-kontrol"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": []
+    },
+    {
+      "id": "T-KULLANICI",
+      "title": "Forn ile gerçek bir deney çiftini kaydet ve değerlendir",
+      "status": "todo",
+      "object_ids": [
+        "teknik-kontrol",
+        "kullanici-denemesi"
+      ],
+      "depends_on": [
+        "T-DOGRULA"
+      ],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Forn kendi deney çiftini kullanarak akışı dener; kaynaklı gerçek geri bildirim kaydedilir.",
+        "Geri bildirimde kabul edilenler ve kalan sorunlar ayrılır; ajan kullanıcı kabulünü kendisi vermez."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "teknik-kontrol"
+      ],
+      "output_ids": [
+        "kullanici-denemesi"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": []
+    },
+    {
+      "id": "T-ORNEK-DEGER",
+      "title": "Kurmaca değerlendirmeleri somut çıktı ve ölçütlere göre incele",
+      "status": "todo",
+      "object_ids": [
+        "cikti-a",
+        "cikti-b",
+        "olcut-somut",
+        "olcut-tek",
+        "deger-a-somut",
+        "deger-a-tek",
+        "deger-b-somut",
+        "deger-b-tek"
+      ],
+      "depends_on": [],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Dört kurmaca değerlendirme doğru çıktı ve ölçüte bağlıdır; karsiliyor/gerekce alanları örnek metinlerle tutarlıdır."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "cikti-a",
+        "cikti-b",
+        "olcut-somut",
+        "olcut-tek"
+      ],
+      "output_ids": [
+        "deger-a-somut",
+        "deger-a-tek",
+        "deger-b-somut",
+        "deger-b-tek"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": []
+    },
+    {
+      "id": "T-ORNEK-KARS",
+      "title": "Kurmaca A/B karşılaştırmasının dayanaklarını incele",
+      "status": "todo",
+      "object_ids": [
+        "deger-a-somut",
+        "deger-a-tek",
+        "deger-b-somut",
+        "deger-b-tek",
+        "karsilastirma-ab"
+      ],
+      "depends_on": [],
+      "decision_ids": [
+        "D-AMAC",
+        "D-PAKET"
+      ],
+      "acceptance": [
+        "Karşılaştırma iki deneye ve dört değerlendirmeye bağlıdır; sonuç gerçek model testi diye sunulmaz."
+      ],
+      "evidence": [],
+      "input_ids": [
+        "deger-a-somut",
+        "deger-a-tek",
+        "deger-b-somut",
+        "deger-b-tek"
+      ],
+      "output_ids": [
+        "karsilastirma-ab"
+      ],
+      "input_snapshot": null,
+      "generation": 0,
+      "review_reasons": [],
+      "acceptance_rules": [
+        {
+          "id": "two-runs",
+          "label": "İki farklı deney karşılaştırılır",
+          "op": "count",
+          "selector": {
+            "roots": [
+              "karsilastirma-ab"
+            ],
+            "path": [
+              {
+                "relation_type": "compares_run",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "min": 2,
+          "max": 2
+        },
+        {
+          "id": "four-evaluations",
+          "label": "Dört değerlendirme kullanılır",
+          "op": "count",
+          "selector": {
+            "roots": [
+              "karsilastirma-ab"
+            ],
+            "path": [
+              {
+                "relation_type": "contributes",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "min": 4,
+          "max": 4
+        },
+        {
+          "id": "two-artifacts",
+          "label": "İki farklı çıktı değerlendirilir",
+          "op": "count",
+          "selector": {
+            "roots": [
+              "karsilastirma-ab"
+            ],
+            "path": [
+              {
+                "relation_type": "contributes",
+                "direction": "in"
+              },
+              {
+                "relation_type": "evaluated_by",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "min": 2,
+          "max": 2
+        },
+        {
+          "id": "matching-runs",
+          "label": "Değerlendirilen çıktılar karşılaştırılan deneylere aittir",
+          "op": "equal_sets",
+          "left": {
+            "roots": [
+              "karsilastirma-ab"
+            ],
+            "path": [
+              {
+                "relation_type": "contributes",
+                "direction": "in"
+              },
+              {
+                "relation_type": "evaluated_by",
+                "direction": "in"
+              },
+              {
+                "relation_type": "produces",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "right": {
+            "roots": [
+              "karsilastirma-ab"
+            ],
+            "path": [
+              {
+                "relation_type": "compares_run",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          }
+        },
+        {
+          "id": "criteria-a",
+          "label": "A iki farklı ölçüte göre değerlendirilir",
+          "op": "count",
+          "selector": {
+            "roots": [
+              "deger-a-somut",
+              "deger-a-tek"
+            ],
+            "path": [
+              {
+                "relation_type": "criterion_for",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "min": 2,
+          "max": 2
+        },
+        {
+          "id": "criteria-b",
+          "label": "B iki farklı ölçüte göre değerlendirilir",
+          "op": "count",
+          "selector": {
+            "roots": [
+              "deger-b-somut",
+              "deger-b-tek"
+            ],
+            "path": [
+              {
+                "relation_type": "criterion_for",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "min": 2,
+          "max": 2
+        },
+        {
+          "id": "same-criteria",
+          "label": "Her iki değerlendirme grubu aynı ölçütleri kullanır",
+          "op": "equal_sets",
+          "left": {
+            "roots": [
+              "deger-a-somut",
+              "deger-a-tek"
+            ],
+            "path": [
+              {
+                "relation_type": "criterion_for",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          },
+          "right": {
+            "roots": [
+              "deger-b-somut",
+              "deger-b-tek"
+            ],
+            "path": [
+              {
+                "relation_type": "criterion_for",
+                "direction": "in"
+              }
+            ],
+            "property": null
+          }
+        }
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D-AMAC",
+      "topic": "purpose",
+      "statement": "Deney Defteri projesini Forn ve başka insanların yararlanacağı bir araç olarak başlat.",
+      "status": "accepted",
+      "rationale": "Kullanıcı Deney Defteri fikrini seçti ve başkalarının da yararlanmasını istedi.",
+      "source": "Kullanıcı: “deney defteri iyi bak, insanlar da yararlanır hadi başlayalım” ve proje-baslat çağrısı.",
+      "supersedes": null,
+      "accepted_by": "user"
+    },
+    {
+      "id": "D-PAKET",
+      "topic": "first-package",
+      "statement": "İlk iş paketini deney kaydı, çıktı bağlama ve iki deneyi karşılaştırma akışıyla sınırla; önce ürün taslağı hazırla.",
+      "status": "accepted",
+      "rationale": "Seçilen fikrin ilk sürümünü somutlaştıran, küçük ve geri alınabilir uygulama kapsamı.",
+      "source": "Asistanın seçilen fikre dayalı ilk iş paketi; kapsam ayrıntıları kullanıcı kararı olarak sunulmaz.",
+      "supersedes": null,
+      "accepted_by": "agent"
+    },
+    {
+      "id": "D-PAYLASIM",
+      "topic": "sharing",
+      "statement": "Önce herkes kendi deney defterini kullansın; seçilen deney çiftleri daha sonra dışa aktarılabilsin.",
+      "status": "proposed",
+      "rationale": "Başkalarının yararlanmasını ortak hesap ve sosyal platform gerektirmeden sınamaya uygun bir başlangıç önerisi.",
+      "source": "Ajan önerisi; kullanıcı henüz paylaşım biçimini seçmedi.",
+      "supersedes": null,
+      "accepted_by": null
+    }
+  ],
+  "history": [],
+  "ontology": {
+    "object_types": [
+      {
+        "id": "product",
+        "label": "Ürün",
+        "properties": {
+          "amac": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          }
+        }
+      },
+      {
+        "id": "deliverable",
+        "label": "Proje çıktısı",
+        "properties": {
+          "aciklama": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "dosya": {
+            "type": "file",
+            "required": false,
+            "enum": null
+          }
+        }
+      },
+      {
+        "id": "model",
+        "label": "AI modeli",
+        "properties": {
+          "ad": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "kurmaca": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          },
+          "surum": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          }
+        },
+        "immutable": true
+      },
+      {
+        "id": "prompt",
+        "label": "Komut",
+        "properties": {
+          "metin": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "kurmaca": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          },
+          "surum": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          }
+        },
+        "immutable": true
+      },
+      {
+        "id": "experiment",
+        "label": "Deney",
+        "properties": {
+          "amac": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "kurmaca": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          },
+          "calistirildi": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          },
+          "surum": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          }
+        },
+        "immutable": true
+      },
+      {
+        "id": "artifact",
+        "label": "Deney çıktısı",
+        "properties": {
+          "metin": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "kurmaca": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          },
+          "surum": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          }
+        },
+        "immutable": true
+      },
+      {
+        "id": "criterion",
+        "label": "Ölçüt",
+        "properties": {
+          "tanim": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          }
+        }
+      },
+      {
+        "id": "evaluation",
+        "label": "Değerlendirme",
+        "properties": {
+          "karsiliyor": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          },
+          "gerekce": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "kurmaca": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          }
+        }
+      },
+      {
+        "id": "comparison",
+        "label": "Karşılaştırma",
+        "properties": {
+          "sonuc": {
+            "type": "string",
+            "required": true,
+            "enum": null
+          },
+          "kurmaca": {
+            "type": "boolean",
+            "required": true,
+            "enum": null
+          }
+        }
+      }
+    ],
+    "relation_types": [
+      {
+        "id": "model_for",
+        "label": "modeliyle denenir",
+        "from_type": "model",
+        "to_type": "experiment",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 1,
+        "to_max": 1,
+        "impact": "forward",
+        "immutable": true
+      },
+      {
+        "id": "prompt_for",
+        "label": "komutuyla denenir",
+        "from_type": "prompt",
+        "to_type": "experiment",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 1,
+        "to_max": 1,
+        "impact": "forward",
+        "immutable": true
+      },
+      {
+        "id": "produces",
+        "label": "çıktı üretir",
+        "from_type": "experiment",
+        "to_type": "artifact",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 1,
+        "to_max": 1,
+        "impact": "forward",
+        "immutable": true
+      },
+      {
+        "id": "evaluated_by",
+        "label": "değerlendirmeye girdi olur",
+        "from_type": "artifact",
+        "to_type": "evaluation",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 1,
+        "to_max": 1,
+        "impact": "forward"
+      },
+      {
+        "id": "criterion_for",
+        "label": "ölçütü uygulanır",
+        "from_type": "criterion",
+        "to_type": "evaluation",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 1,
+        "to_max": 1,
+        "impact": "forward"
+      },
+      {
+        "id": "contributes",
+        "label": "karşılaştırmaya katılır",
+        "from_type": "evaluation",
+        "to_type": "comparison",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 2,
+        "to_max": null,
+        "impact": "forward"
+      },
+      {
+        "id": "compares_run",
+        "label": "karşılaştırılır",
+        "from_type": "experiment",
+        "to_type": "comparison",
+        "from_min": 0,
+        "from_max": null,
+        "to_min": 2,
+        "to_max": 2,
+        "impact": "forward"
+      }
+    ]
+  }
+}

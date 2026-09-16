@@ -6,7 +6,7 @@
 
 Projendeki hedefleri, bilgileri, işleri ve kararları birbirine bağlayan Türkçe bir **AI çalışma skill’i**.
 
-**v0.3 pilot · Türkçe · Linux / Python 3.10+ · Yerel proje kayıtları**
+**v0.3 pilot · Türkçe · Windows · macOS · Linux / Python 3.10+ · Yerel proje kayıtları**
 
 [Hemen başla](#hemen-basla) · [Bana ne kazandırır?](#bana-ne-kazandirir) · [Ontoloji nedir?](#ontoloji-nedir) · [Palantir bağlantısı](#palantir-baglantisi) · [Bir proje boyunca](#bir-proje-boyunca)
 
@@ -221,7 +221,7 @@ Yeni eklenen bir kaynak kendiliğinden “incelenmiş” sayılmaz. Alternatif k
 ### Gerekenler
 
 - Proje dosyalarını okuyup yazabilen ve komut çalıştırabilen bir AI ajanı.
-- **Linux ve Python 3.10 veya üzeri.** Diğer işletim sistemleri bu sürümde doğrulanmış değil; CLI Linux dosya kilidi kullanır.
+- **Python 3.10 veya üzeri.** Windows, macOS ve Linux için düzenlenmiştir; Bash veya WSL gerekmez. Yerel kontroller Linux üzerinde geçti; platform sonuçları [GitHub Actions](https://github.com/fornhere/proje-baslat-skill/actions) sayfasındadır.
 - İndirilen skill dosyaları. Kontrol betikleri ek Python paketi veya API anahtarı istemez. Kullandığın AI hizmetinin erişimi ve maliyeti ayrıdır.
 
 ### 1. Paketi indir
@@ -233,6 +233,8 @@ git clone https://github.com/fornhere/proje-baslat-skill.git
 cd proje-baslat-skill
 python3 --version
 ```
+
+Windows PowerShell’de `python3` yerine `py -3` kullan. `py` yoksa `python --version` ile Python 3.10+ doğrula ve `python` kullan. Boşluklu yolları tırnakla. [Platform komutları ve yükseltme rehberi](docs/KULLANIM.md).
 
 Git kullanmıyorsan GitHub’daki **Code → Download ZIP** ile indirip klasörü açabilirsin. Açtığın klasörü AI ajanının çalışma alanı yap.
 
@@ -357,7 +359,11 @@ Kontrol betikleri kayıtları yerel proje klasöründe tutar; kendi içinde ağ 
 <details>
 <summary><strong>Pakette az dosya olması çalışma düzenini eksiltir mi?</strong></summary>
 
+Bu depo tek resmî yayın adresidir. Geliştirme notları ve özel arşivler dağıtıma dahil değildir.
+
 Çalışma paketi; skill yönergesini, ajan arayüz bilgisini, üç teknik referansı ve dört Python betiğini içerir. Bunlar kurulum ve devam akışının ihtiyaç duyduğu dosyalardır. Kullanıcı projeleri ve geliştirme sırasında üretilen ham araştırma/deneme arşivleri paketin çalışma bağımlılığı değildir.
+
+Depodaki `tests/`, `examples/` ve `scripts/demo.py` kaynakları davranış kontrollerini yeniden çalıştırmak içindir. `python3 -m unittest discover -s tests -v` ile testleri çalıştırabilirsin (Windows: `py -3`). [CI tanımı](.github/workflows/tests.yml) Python 3.10/3.14 ve üç işletim sistemini kapsar.
 
 Yayımlanan v0.3 paketinde yeni proje kurulumu, görev başlatma/kanıt sunma/tamamlama, salt okunur değişiklik provası ve ölçüt değişince ilgili değerlendirmeyi yeniden incelemeye alma akışı kontrol edildi. Bu, her ajan ve işletim sisteminde sorunsuzluk garantisi değildir.
 
@@ -392,7 +398,7 @@ Yayımlanan v0.3 paketinde yeni proje kurulumu, görev başlatma/kanıt sunma/ta
 
 ### Değişiklik ve dosya yazımı
 
-Önizleme ile uygulama aynı geçiş motorunu kullanır. Beklenen revizyon eski bağlamı reddeder; `--preview-digest` önizlemeden sonra başvurulan dosya veya işlem değişimini de kontrol eder. Linux CLI yazıcıları kilitle sıralanır. Haricî editörler bu kilide uymaz; yerel geçmiş imzalı bir denetim defteri değildir.
+Önizleme ile uygulama aynı geçiş motorunu kullanır. Beklenen revizyon eski bağlamı reddeder; `--preview-digest` önizlemeden sonra başvurulan dosya veya işlem değişimini de kontrol eder. macOS/Linux CLI yazıcıları flock, Windows yazıcıları msvcrt kilidiyle sıralanır. Haricî editörler bu kilide uymaz; yerel geçmiş imzalı bir denetim defteri değildir.
 
 Yeni projeler şema 3 kullanır. Eski şema 1/2 projelerde runtime yükseltmesi ile ontolojiye geçiş ayrı adımlardır. `upgrade` tek başına eski alan modelini dönüştürmez. [Yükseltme ve geçiş akışı](skills/proje-baslat/references/plan-changes.md).
 

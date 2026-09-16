@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import math
+import stat
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
@@ -255,9 +256,16 @@ def _relative_path(value):
     _require(not posix.is_absolute() and not windows.is_absolute()
              and not windows.drive and "\\" not in value,
              "evidence.path: use a relative POSIX path")
-    _require(".." not in posix.parts and ".project" not in posix.parts
+    _require(".." not in posix.parts and ".project" not in {p.casefold() for p in posix.parts}
              and posix.parts and "\x00" not in value,
              "evidence.path: traversal or managed path forbidden")
+    # Avoid Windows device names, alternate data streams and normalized aliases.
+    reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+        prefix + digit for prefix in ("COM", "LPT") for digit in "123456789¹²³"}
+    _require(all(not any(c in '<>:"|?*' or ord(c) < 32 for c in part)
+                 and not part.endswith((".", " "))
+                 and part.split(".")[0].upper() not in reserved for part in posix.parts),
+             "evidence.path: use a portable filename (no Windows devices or aliases)")
     return posix
 
 
@@ -462,6 +470,16 @@ def validate(state):
         raise ValueError(f"malformed project model: {exc}") from exc
 
 
+def is_link(path):
+    """Reject symlinks and Windows junction/reparse aliases (also Python 3.10)."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def _hash_file(root, relative):
     parts = _relative_path(relative).parts
     base = Path(root).resolve()
@@ -469,7 +487,7 @@ def _hash_file(root, relative):
     try:
         for part in parts:
             candidate = candidate / part
-            _require(not candidate.is_symlink(), "evidence symlink forbidden")
+            _require(not is_link(candidate), "evidence symlink forbidden")
         _require(candidate.resolve().is_relative_to(base), "evidence escapes project")
         _require(candidate.is_file(), f"evidence file missing or not regular: {relative}")
         digest = hashlib.sha256()

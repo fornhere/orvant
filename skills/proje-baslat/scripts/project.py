@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Local project records CLI; cooperating Linux writers use an advisory lock."""
+"""Local project records CLI with cooperating Windows, macOS and Linux writers."""
 from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -13,6 +12,12 @@ import shutil
 import shlex
 import sys
 import tempfile
+import time
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 sys.dont_write_bytecode = True
 import core
@@ -29,6 +34,9 @@ Güncel özet ve kanıt durumunu görmek için proje kökünden çalıştır:
 python3 .project/scripts/project.py context .
 ```
 
+Windows PowerShell'de `python3` yerine `py -3` (veya Python 3.10+
+olduğu doğrulanan `python`) kullan. macOS/Linux'ta `python3` kullan.
+
 Yetkili kayıt `.project/state.json`; `.project/CONTEXT.md` türetilen görünümdür.
 Şema 3 ontolojisi ve somut kayıtlar için `python3 .project/scripts/project.py
 ontology .` çalıştır; `.project/ONTOLOJİ.md` bunun üretilmiş görünümüdür.
@@ -37,7 +45,7 @@ revizyonu `--expected-revision` olarak belirterek işle. Komut seçenekleri içi
 `python3 .project/scripts/project.py --help` kullan.
 Önerileri kabul edilmiş karar sayma. Kontrol başarısını kullanıcı kabulü sayma.
 Değişimin etkisini yazmadan görmek için `preview . --event <eylem.json>
---expected-revision <revizyon>` kullan. CLI yazıcıları Linux kilidiyle sıraya
+--expected-revision <revizyon>` kullan. CLI yazıcıları işletim sistemi kilidiyle sıraya
 girer; kayıt dosyasına dışarıdan veya elle paralel durum yazımı yapma.
 """
 
@@ -49,7 +57,11 @@ def emit(value: dict) -> None:
 def no_symlink(path: Path) -> None:
     """Check existing path components without first resolving symlinks."""
     for item in (path, *path.parents):
-        if item.is_symlink():
+        # macOS ships these system aliases; do not relax project-local links.
+        if sys.platform == "darwin" and str(item) in {"/tmp", "/var", "/etc"}:
+            if item.resolve() == Path("/private") / item.name:
+                continue
+        if core.is_link(item):
             raise ValueError(f"Symlink conflict: {item}")
 
 
@@ -90,7 +102,7 @@ def read_json(path: Path) -> dict:
                 raise ValueError(f"Duplicate JSON key: {key}")
             result[key] = value
         return result
-    with path.open(encoding="utf-8") as handle:
+    with path.open(encoding="utf-8-sig") as handle:
         value = json.load(handle, parse_constant=reject_constant, object_pairs_hook=unique_object)
     if not isinstance(value, dict):
         raise ValueError(f"Expected JSON object: {path}")
@@ -127,21 +139,42 @@ def json_text(value: dict) -> str:
 def writer_lock(value: str):
     """Serialize CLI writers for one lexical project root without changing its tree.
 
-    Locks are advisory Linux flock locks, not authentication. The directory is
-    private to this OS user; a process crash releases the held descriptor.
+    POSIX uses flock; Windows locks byte zero with msvcrt. These coordinate
+    cooperating writers, not authentication. A crash releases the descriptor.
     """
     root = os.path.abspath(os.path.expanduser(value))
     no_symlink(Path(root))
-    directory = Path(tempfile.gettempdir()) / f"proje-baslat-locks-{os.getuid()}"
+    if sys.platform == "darwin" or os.name == "nt":
+        root = os.path.normcase(str(Path(root).resolve()))
+    user = (str(os.getuid()) if os.name != "nt" else
+            hashlib.sha256(str(Path.home()).encode()).hexdigest()[:16])
+    directory = Path(tempfile.gettempdir()).resolve() / f"proje-baslat-locks-{user}"
     directory.mkdir(mode=0o700, exist_ok=True)
     no_symlink(directory)
     info = directory.stat()
-    if not directory.is_dir() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+    if not directory.is_dir() or (os.name != "nt" and
+            (info.st_uid != os.getuid() or info.st_mode & 0o077)):
         raise ValueError("Writer lock directory must be private and owned by current user")
     name = hashlib.sha256(root.encode()).hexdigest() + ".lock"
-    descriptor = os.open(directory / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    lock_path = directory / name
+    optional_file(lock_path)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if os.name == "nt":
+            # Locking a byte beyond EOF is supported; no initialization write
+            # can race with another process already holding the lock.
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Writer lock busy; retry after the current writer finishes")
+                    time.sleep(0.05)
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield
     finally:
         os.close(descriptor)
@@ -153,7 +186,7 @@ def load_project(root: Path, *, complete: bool = False) -> dict:
     if not folder.is_dir():
         raise ValueError("Project is not initialized: .project directory missing or invalid")
     for entry in folder.rglob("*"):
-        if entry.is_symlink():
+        if core.is_link(entry):
             raise ValueError(f"Managed symlink conflict: {entry}")
     required = REQUIRED if complete else ("state.json", "scripts/project.py", "scripts/core.py")
     for relative in required:
@@ -170,9 +203,13 @@ def load_project(root: Path, *, complete: bool = False) -> dict:
 
 def integration_status(root: Path, *, created: bool = False) -> dict:
     overrides = [str(path) for path in (root / "AGENTS.override.md",) if path.exists()]
+    arguments = [str(root / ".project/scripts/project.py"), "context", str(root)]
+    command = ("& " + " ".join("'" + arg.replace("'", "''") + "'"
+                               for arg in [sys.executable, *arguments])
+               if os.name == "nt" else "python3 " + shlex.join(arguments))
     return {
-        "continue_command": "python3 " + shlex.quote(str(root / ".project/scripts/project.py"))
-                            + " context " + shlex.quote(str(root)),
+        "continue_command": command,
+        "continue_shell": "powershell" if os.name == "nt" else "posix",
         "agents_created": created,
         "existing_agents_preserved": not created and (root / "AGENTS.md").exists(),
         "integration": "created" if created and not overrides else "review_required",
@@ -463,6 +500,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Pipes on Windows otherwise inherit an ANSI code page and lose Turkish.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     args = parser().parse_args(argv)
     try:
         if args.command in {"init", "apply", "upgrade"}:

@@ -1,7 +1,7 @@
 # v0.3 model ve komut sözleşmesi
 
 Tek kaynak `.project/state.json`; `.project/CONTEXT.md` ve `.project/ONTOLOJİ.md`
-türetilen görünümlerdir. Python 3.10+, standart kütüphane, Linux. Yeni proje şema 3
+türetilen görünümlerdir. Python 3.10+, standart kütüphane, Windows/macOS/Linux. Yeni proje şema 3
 kullanır; şema 1/2 kayıtlar okunur ve açık migrasyonla geçer. Genel JSON patch yoktur.
 
 ## Başlangıç spec'i
@@ -305,7 +305,7 @@ otomatik içerik doğruluğu hesabı yoktur. Şema 3 eylemleri değişen görevl
 kabul snapshot'larının tarihi oradan incelenebilir. `history` revizyon ve işlem geçmişidir;
 değiştirilemez veya tüm durumu geri oynatabilen bir olay defteri değildir.
 
-CLI init/apply/upgrade işlemleri aynı kullanıcı altında proje köküne göre Linux
+CLI init/apply/upgrade işlemleri aynı kullanıcı altında proje köküne göre işletim sistemi
 advisory kilidi alır. Başka betiğin/insanın doğrudan yazmasını engellemez. State
 tek dosyada atomik değiştirilir; runtime modülleri topluca atomik değildir.
 [Yükseltme ve yedekten kurtarma](plan-changes.md) talimatlarını kullan.
