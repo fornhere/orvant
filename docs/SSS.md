@@ -69,8 +69,8 @@ ayrıdır. Bu teknik özellikler depoya dağıtım veya lisans izni vermez.
 
 ## 10. Hangi ajan ve işletim sisteminde çalışıyor?
 
-Runtime Python 3.10+ ile Windows, macOS ve Linux için düzenlendi. Yerel testler
-Linux üzerinde çalıştırıldı; Windows/macOS CI sonucu henüz alınmadı.
+Runtime Python 3.10+ ile Windows, macOS ve Linux için düzenlendi. Windows/macOS/Linux ve Python 3.10/3.14 için test ve demo koşuları
+[CI üzerinde geçti](https://github.com/fornhere/proje-baslat-skill/actions/runs/35109602302).
 [Platforma göre komutlar](KULLANIM.md#işletim-sistemine-göre-komutlar). JSON/Markdown taşınabilir; otomatik keşif ve komut çalıştırma
 istemciye bağlıdır. [Resmî Codex skill belgesi](https://learn.chatgpt.com/docs/build-skills).
 Güncel koşular [GitHub Actions](https://github.com/fornhere/proje-baslat-skill/actions) sayfasındadır.

@@ -39,8 +39,8 @@ sonra tekrar dene. Ağ paylaşımı, OneDrive/iCloud eşzamanlı yazımı ve ayr
 sistemlerinden aynı projeye paralel yazım desteklenmez. Eski proje kopyalarına
 bu değişikliği taşımak için aşağıdaki `upgrade` akışını kullan.
 
-CI Windows/macOS/Linux ve Python 3.10/3.14 üzerinde test ile demo çalıştıracak
-şekilde tanımlandı. CI sonucu alınmadan Windows/macOS üzerinde doğrulandı denmez.
+Windows/macOS/Linux ve Python 3.10/3.14 üzerinde altı CI koşusunun tamamında
+testler ve demo geçti. [16 Eylül 2026 doğrulaması](https://github.com/fornhere/proje-baslat-skill/actions/runs/35109602302).
 
 ## 1. Skill'i kullanma
 
