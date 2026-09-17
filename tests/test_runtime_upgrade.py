@@ -12,7 +12,7 @@ from unittest import mock
 from fixtures import build_spec, write_artifacts
 
 REPO = Path(__file__).resolve().parents[1]
-SCRIPTS = REPO / "skills" / "proje-baslat" / "scripts"
+SCRIPTS = REPO / "skills" / "orvant" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import project
 

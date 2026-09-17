@@ -1,6 +1,6 @@
 <div align="center">
 
-# Proje Başlat
+# Orvant
 
 ### Fikrini netleştir. Yapay zekâyla geliştir. Neye göre bittiğini bil.
 
@@ -23,7 +23,7 @@ Yapay zekâya bir fikrini anlattın. Bir plan çıktı, birkaç dosya oluştu, b
 - Kaynak değişti ama ona dayanarak yazılan sonuç aynı kaldı.
 - Yapılacaklar listesinde iş bitti görünüyordu; hangi koşula göre bittiği belli değildi.
 
-**Proje Başlat, bu bilgileri projenin içinde tutulan ve kontrol edilebilen bir çalışma düzenine çevirir.** Neyi yapmak istediğini, neye dayandığını, hangi işin hazır olduğunu ve neyin yeniden incelenmesi gerektiğini birlikte gösterir.
+**Orvant, bu bilgileri projenin içinde tutulan ve kontrol edilebilen bir çalışma düzenine çevirir.** Neyi yapmak istediğini, neye dayandığını, hangi işin hazır olduğunu ve neyin yeniden incelenmesi gerektiğini birlikte gösterir.
 
 Bir *skill*, AI ajanına belirli bir işi nasıl yürüteceğini anlatan yönerge ve yardımcı araç paketidir. Buradaki ajan; proje dosyalarını okuyabilen, düzenleyebilen ve komut çalıştırabilen yapay zekâ yardımcındır. Sen amacını normal Türkçeyle anlatırsın; ajan bu paketi kullanarak çalışma kaydını hazırlar ve güncel tutar.
 
@@ -143,7 +143,7 @@ Tür ve örnek ayrımı bu yaklaşımın temel parçalarındandır: tür bir var
 
 Eylemler de modele dâhildir: bir veya birden fazla nesnenin özellikleri ve bağlantıları tanımlı bir işlemle değiştirilebilir. [Palantir eylem türleri](https://www.palantir.com/docs/foundry/action-types/overview/).
 
-**Proje Başlat’ın buradan aldığı tasarım fikri:** Bir projeyi yürütürken hedefi, bilgiyi, ilişkiyi ve yapılacak işi ortak bir model içinde ele almak.
+**Orvant’ın buradan aldığı tasarım fikri:** Bir projeyi yürütürken hedefi, bilgiyi, ilişkiyi ve yapılacak işi ortak bir model içinde ele almak.
 
 | Esinlenilen fikir | Bu skill’deki yerel uygulama |
 |---|---|
@@ -152,7 +152,7 @@ Eylemler de modele dâhildir: bir veya birden fazla nesnenin özellikleri ve ba�
 | Modeli günlük iş akışında kullanmak | Girdi/çıktı bağları, önkoşullar ve kabul güncelliği |
 | Kayıtlı bilgiyi anlaşılır göstermek | Proje bağlamı, ontoloji görünümü ve ilişki haritası |
 
-Bu tablo bizim tasarım uyarlamamızı anlatır. **Proje Başlat, Palantir ile bağlantılı resmî bir ürün veya Palantir platformunun eşdeğeri değildir.** Palantir hesabı, hizmeti ya da altyapısı kullanmaz. Buradaki uygulama Python ve yerel dosyalarla çalışan küçük bir proje modelidir.
+Bu tablo bizim tasarım uyarlamamızı anlatır. **Orvant, Palantir ile bağlantılı resmî bir ürün veya Palantir platformunun eşdeğeri değildir.** Palantir hesabı, hizmeti ya da altyapısı kullanmaz. Buradaki uygulama Python ve yerel dosyalarla çalışan küçük bir proje modelidir.
 
 ## Somut örnek: iki AI denemesini karşılaştırmak
 
@@ -212,7 +212,7 @@ Bazı işler bütün girdileri gerektirir; bazı iddialar ise önceden incelenmi
 - **Hepsi gerekli:** Bir dayanağın kaybı yeniden inceleme gerektirir.
 - **En az biri yeterli:** İncelenmiş A değişse de incelenmiş B güncelse kabul korunabilir.
 
-Yeni eklenen bir kaynak kendiliğinden “incelenmiş” sayılmaz. Alternatif kaynakların hangi koşulda yeterli olduğu ajan/insan tarafından açıkça belirtilir. [Destek grupları ve kurallar](skills/proje-baslat/references/ontology.md).
+Yeni eklenen bir kaynak kendiliğinden “incelenmiş” sayılmaz. Alternatif kaynakların hangi koşulda yeterli olduğu ajan/insan tarafından açıkça belirtilir. [Destek grupları ve kurallar](skills/orvant/references/ontology.md).
 
 <a id="hemen-basla"></a>
 
@@ -221,7 +221,7 @@ Yeni eklenen bir kaynak kendiliğinden “incelenmiş” sayılmaz. Alternatif k
 ### Gerekenler
 
 - Proje dosyalarını okuyup yazabilen ve komut çalıştırabilen bir AI ajanı.
-- **Python 3.10 veya üzeri.** Windows, macOS ve Linux için düzenlenmiştir; Bash veya WSL gerekmez. Yerel kontroller Linux üzerinde geçti; platform sonuçları [GitHub Actions](https://github.com/fornhere/proje-baslat-skill/actions) sayfasındadır.
+- **Python 3.10 veya üzeri.** Windows, macOS ve Linux için düzenlenmiştir; Bash veya WSL gerekmez. Yerel kontroller Linux üzerinde geçti; platform sonuçları [GitHub Actions](https://github.com/fornhere/orvant/actions) sayfasındadır.
 - İndirilen skill dosyaları. Kontrol betikleri ek Python paketi veya API anahtarı istemez. Kullandığın AI hizmetinin erişimi ve maliyeti ayrıdır.
 
 ### 1. Paketi indir
@@ -229,8 +229,8 @@ Yeni eklenen bir kaynak kendiliğinden “incelenmiş” sayılmaz. Alternatif k
 Git kullanıyorsan:
 
 ```sh
-git clone https://github.com/fornhere/proje-baslat-skill.git
-cd proje-baslat-skill
+git clone https://github.com/fornhere/orvant.git
+cd orvant
 python3 --version
 ```
 
@@ -243,7 +243,7 @@ Git kullanmıyorsan GitHub’daki **Code → Download ZIP** ile indirip klasör�
 Aşağıdaki metni kendi projenle değiştirerek kullan:
 
 ```text
-skills/proje-baslat/SKILL.md dosyasını oku ve uygula.
+skills/orvant/SKILL.md dosyasını oku ve uygula.
 
 Mahalle etkinlikleri için haftalık bir bülten hazırlamak istiyorum.
 Hedef kitlem mahallede yaşayan insanlar. İlk çıktı üç kaynaklı etkinlikten
@@ -256,7 +256,7 @@ sayma. Alan modelini kur, bana basitçe göster ve ilk yapılabilir işi söyle.
 
 Ajan gerektiğinde kısa sorular sorar, proje modelini hazırlar ve kontrol betiğiyle kurar. JSON’u elle yazman beklenmez. Paket klasörünü indirmek her ajan uygulamasında otomatik skill kurulumu anlamına gelmez; **yukarıdaki açık dosya yolu ile çağrı** başlangıç için kullanılabilir.
 
-Skill kullandığın ajan tarafından keşfedilmişse `$proje-baslat` adıyla da çağrılabilir. Keşif ve kalıcı kurulum biçimi kullandığın uygulamaya bağlıdır.
+Skill kullandığın ajan tarafından keşfedilmişse `$orvant` adıyla da çağrılabilir. Keşif ve kalıcı kurulum biçimi kullandığın uygulamaya bağlıdır.
 
 ### 3. Gerçek işe devam et
 
@@ -338,7 +338,7 @@ Skill, işi adımlara ayırma, dayanakları izleme ve sonucu denetleme düzeni s
 <details>
 <summary><strong>Projeye sonradan yeni iş eklenebilir mi?</strong></summary>
 
-Evet. Yeni nesne, ilişki ve görevler eklenebilir; görev tanımı ve alan kayıtları desteklenen işlemlerle değiştirilebilir. Ajan önce değişikliğin etkisini inceler. Genel proje hedefini değiştirme veya görev iptali gibi her işlem için hazır bir eylem bulunmaz; desteklenen kapsam [değişiklik rehberinde](skills/proje-baslat/references/plan-changes.md) açıklanır.
+Evet. Yeni nesne, ilişki ve görevler eklenebilir; görev tanımı ve alan kayıtları desteklenen işlemlerle değiştirilebilir. Ajan önce değişikliğin etkisini inceler. Genel proje hedefini değiştirme veya görev iptali gibi her işlem için hazır bir eylem bulunmaz; desteklenen kapsam [değişiklik rehberinde](skills/orvant/references/plan-changes.md) açıklanır.
 
 </details>
 
@@ -400,7 +400,7 @@ Yayımlanan v0.3 paketinde yeni proje kurulumu, görev başlatma/kanıt sunma/ta
 
 Önizleme ile uygulama aynı geçiş motorunu kullanır. Beklenen revizyon eski bağlamı reddeder; `--preview-digest` önizlemeden sonra başvurulan dosya veya işlem değişimini de kontrol eder. macOS/Linux CLI yazıcıları flock, Windows yazıcıları msvcrt kilidiyle sıralanır. Haricî editörler bu kilide uymaz; yerel geçmiş imzalı bir denetim defteri değildir.
 
-Yeni projeler şema 3 kullanır. Eski şema 1/2 projelerde runtime yükseltmesi ile ontolojiye geçiş ayrı adımlardır. `upgrade` tek başına eski alan modelini dönüştürmez. [Yükseltme ve geçiş akışı](skills/proje-baslat/references/plan-changes.md).
+Yeni projeler şema 3 kullanır. Eski şema 1/2 projelerde runtime yükseltmesi ile ontolojiye geçiş ayrı adımlardır. `upgrade` tek başına eski alan modelini dönüştürmez. [Yükseltme ve geçiş akışı](skills/orvant/references/plan-changes.md).
 
 </details>
 
@@ -408,9 +408,16 @@ Yeni projeler şema 3 kullanır. Eski şema 1/2 projelerde runtime yükseltmesi 
 
 | Aradığın bilgi | Belge |
 |---|---|
-| Ajan bu düzeni nasıl uygular? | [Skill yönergeleri](skills/proje-baslat/SKILL.md) |
-| Projemin ontolojisini nasıl modellemeliyim? | [Ontoloji rehberi](skills/proje-baslat/references/ontology.md) |
-| Alanlar, kurallar ve kanıtlar nasıl tanımlanır? | [Model sözleşmesi](skills/proje-baslat/references/model.md) |
-| Değişiklik, yeni iş veya eski projeden geçiş nasıl yapılır? | [Değişiklik rehberi](skills/proje-baslat/references/plan-changes.md) |
+| Ajan bu düzeni nasıl uygular? | [Skill yönergeleri](skills/orvant/SKILL.md) |
+| Projemin ontolojisini nasıl modellemeliyim? | [Ontoloji rehberi](skills/orvant/references/ontology.md) |
+| Alanlar, kurallar ve kanıtlar nasıl tanımlanır? | [Model sözleşmesi](skills/orvant/references/model.md) |
+| Değişiklik, yeni iş veya eski projeden geçiş nasıl yapılır? | [Değişiklik rehberi](skills/orvant/references/plan-changes.md) |
 
-**Proje Başlat’ın hedefi:** Bir fikrin hangi işlere dönüştüğünü, bu işlerin neye dayandığını ve sonucun hangi koşullarda kabul edildiğini görünür tutmak.
+**Orvant’ın hedefi:** Bir fikrin hangi işlere dönüştüğünü, bu işlerin neye dayandığını ve sonucun hangi koşullarda kabul edildiğini görünür tutmak.
+
+## İsim değişikliği
+
+Proje Başlat artık **Orvant**. Güncel çağrı `$orvant`, kaynak klasörü
+`skills/orvant/`. Eski proje kayıtları çalışmaya devam eder. Eski doğrudan
+klasör yolu uyumluluk bağlantısıyla korunur; Windows’ta bağlantı açılmazsa
+`skills/orvant/SKILL.md` dosyasını doğrudan okut.

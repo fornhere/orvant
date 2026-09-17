@@ -21,8 +21,8 @@ kabul modeli. Python 3.10+ sözdizimi, standart kütüphane, Windows/macOS/Linux
 
 Yetkili dosya `.project/state.json`; CONTEXT.md ve ONTOLOJİ.md ondan türetilir.
 Eski şema 1/2 desteklenir. Yeni projeler şema 3 ile kurulur. Tam alan tanımları
-[model sözleşmesinde](skills/proje-baslat/references/model.md), alan modelleme
-ilkeleri [ontoloji rehberinde](skills/proje-baslat/references/ontology.md) tutulur.
+[model sözleşmesinde](skills/orvant/references/model.md), alan modelleme
+ilkeleri [ontoloji rehberinde](skills/orvant/references/ontology.md) tutulur.
 
 Tür tanımı ile nesne örneği ayrıdır. İlişki türünde iki uç türü, uç başına
 min/max sayısı ve forward/reverse/both/none değişiklik etkisi bulunur. Bağlantı

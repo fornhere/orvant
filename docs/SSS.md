@@ -1,6 +1,6 @@
 # Sık sorulan sorular
 
-[← Proje Başlat](../README.md) · [Kullanım rehberi](KULLANIM.md)
+[← Orvant](../README.md) · [Kullanım rehberi](KULLANIM.md)
 
 ## 1. Tam olarak hangi sorunu çözmeye çalışıyor?
 
@@ -36,7 +36,7 @@ oturumun bu kayıtları okuyabilmesi için proje dosyalarına erişmesi gerekir.
 Görev girdileri bu kayıtlara bağlanır. Örneğin ölçüt değişince ilgili değerlendirme
 ve onu kullanan karşılaştırma yeniden incelenir. `ontology` komutu modeli somut
 kayıtlarıyla gösterir. Bir kutuya “Deney” yazmak yeterli modelleme sayılmaz.
-[Ontoloji rehberi](../skills/proje-baslat/references/ontology.md).
+[Ontoloji rehberi](../skills/orvant/references/ontology.md).
 
 ## 6. Her projede çalışır mı?
 
@@ -70,10 +70,10 @@ ayrıdır. Bu teknik özellikler depoya dağıtım veya lisans izni vermez.
 ## 10. Hangi ajan ve işletim sisteminde çalışıyor?
 
 Runtime Python 3.10+ ile Windows, macOS ve Linux için düzenlendi. Windows/macOS/Linux ve Python 3.10/3.14 için test ve demo koşuları
-[CI üzerinde geçti](https://github.com/fornhere/proje-baslat-skill/actions/runs/35109602302).
+[CI üzerinde geçti](https://github.com/fornhere/orvant/actions/runs/35109602302).
 [Platforma göre komutlar](KULLANIM.md#işletim-sistemine-göre-komutlar). JSON/Markdown taşınabilir; otomatik keşif ve komut çalıştırma
 istemciye bağlıdır. [Resmî Codex skill belgesi](https://learn.chatgpt.com/docs/build-skills).
-Güncel koşular [GitHub Actions](https://github.com/fornhere/proje-baslat-skill/actions) sayfasındadır.
+Güncel koşular [GitHub Actions](https://github.com/fornhere/orvant/actions) sayfasındadır.
 
 ## 11. Veriler nereye gidiyor?
 
@@ -112,7 +112,7 @@ V3 `mutate_graph` nesne ve ilişki ekleme/düzeltme/silme ile ontoloji şeması
 revizyonunu atomik bir işlemde destekler. Etkileri preview'da görülür ve bağlı
 incelemeler güncelliğini kaybeder. Tarihsel immutable kayıtlar için yeni kimlik
 gerekir. Genel proje hedefini güncelleme ve görev iptal etme eylemi hâlâ yoktur.
-[İşlemler ve geçiş](../skills/proje-baslat/references/plan-changes.md).
+[İşlemler ve geçiş](../skills/orvant/references/plan-changes.md).
 
 ## 16. Testler neyi kanıtlıyor?
 

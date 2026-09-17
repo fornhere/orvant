@@ -7,7 +7,7 @@ import unittest
 
 from fixtures import build_spec, event, write_artifacts
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "proje-baslat" / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "orvant" / "scripts"))
 import core
 
 

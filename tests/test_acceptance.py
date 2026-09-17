@@ -8,7 +8,7 @@ import unittest
 from ontology_fixtures import build_notebook, prop, relation_type, link, task as domain_task, event
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "skills" / "proje-baslat" / "scripts"))
+sys.path.insert(0, str(REPO / "skills" / "orvant" / "scripts"))
 import acceptance
 import core
 import ontology

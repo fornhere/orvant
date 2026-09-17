@@ -1,11 +1,11 @@
 # Kurulum, kullanım ve devam
 
-[← Proje Başlat](../README.md) · [Sık sorulanlar](SSS.md)
+[← Orvant](../README.md) · [Sık sorulanlar](SSS.md)
 
 Komutları aksi belirtilmedikçe klonladığın deponun kökünden çalıştır. Python 3.10+
 gerekir; Windows, macOS ve Linux için ek pip paketi yoktur. Runtime macOS/Linux
 üzerinde `fcntl.flock`, Windows üzerinde `msvcrt.locking` kullanır.
-Güncel otomatik koşular [GitHub Actions](https://github.com/fornhere/proje-baslat-skill/actions) sayfasındadır.
+Güncel otomatik koşular [GitHub Actions](https://github.com/fornhere/orvant/actions) sayfasındadır.
 
 ## İşletim sistemine göre komutlar
 
@@ -15,7 +15,7 @@ başını `py -3` yap; bu başlatıcı yoksa `python --version` ile 3.10+ doğru
 
 ```powershell
 py -3 --version
-py -3 skills/proje-baslat/scripts/project.py init "../benim projem" --spec "examples/deney-defteri.json"
+py -3 skills/orvant/scripts/project.py init "../benim projem" --spec "examples/deney-defteri.json"
 py -3 "../benim projem/.project/scripts/project.py" context "../benim projem"
 py -3 scripts/demo.py "../proje demo"
 py -3 -m unittest discover -s tests -v
@@ -27,7 +27,7 @@ Spec ve eylem JSON dosyalarını UTF-8 kaydet; UTF-8 BOM kabul edilir, UTF-16 ka
 edilmez. CLI çıktısı UTF-8'dir; alt süreçten okurken `encoding="utf-8"` seç.
 Kanıt/nesne yolları her sistemde proje köküne göre `/` ile yazılır.
 
-Skill gerçek klasörü `skills/proje-baslat` içindedir. `.agents` keşif bağlantısı
+Skill gerçek klasörü `skills/orvant` içindedir. `.agents` keşif bağlantısı
 Windows'ta açılmasa da gerçek SKILL.md yolu ile çalıştırılabilir; yönetici izni
 veya Developer Mode normal kullanım için gerekmez. macOS'un `/tmp`, `/var`,
 `/etc` sistem bağlantıları kabul edilir; proje içi symlink ve Windows junction
@@ -40,11 +40,11 @@ sistemlerinden aynı projeye paralel yazım desteklenmez. Eski proje kopyaların
 bu değişikliği taşımak için aşağıdaki `upgrade` akışını kullan.
 
 Windows/macOS/Linux ve Python 3.10/3.14 üzerinde altı CI koşusunun tamamında
-testler ve demo geçti. [16 Eylül 2026 doğrulaması](https://github.com/fornhere/proje-baslat-skill/actions/runs/35109602302).
+testler ve demo geçti. [16 Eylül 2026 doğrulaması](https://github.com/fornhere/orvant/actions/runs/35109602302).
 
 ## 1. Skill'i kullanma
 
-Ajanına `skills/proje-baslat/SKILL.md` dosyasını açıkça okut. Ajan hedef klasörü,
+Ajanına `skills/orvant/SKILL.md` dosyasını açıkça okut. Ajan hedef klasörü,
 hedef kitleyi, ilk çıktıyı ve modelin cevaplaması gereken soruları belirler.
 Türleri, gerçek kayıtları, ilişkileri ve görevleri konuşmadan hazırlar; kullanıcıya
 JSON doldurtmaz. Kabul edilmemiş tercih öneri olarak kalır.
@@ -54,9 +54,9 @@ JSON doldurtmaz. Kabul edilmemiş tercih öneri olarak kalır.
 > Deney Defteri projemi kur. Komut, deney, çıktı ve değerlendirme arasındaki
 > ilişkileri göster. Bir ölçüt değişince hangi incelemenin yenileneceğini modelle.
 
-Depo içindeki `.agents/skills/proje-baslat` göreli bağlantısı keşif içindir.
+Depo içindeki `.agents/skills/orvant` göreli bağlantısı keşif içindir.
 Yeni istemcide otomatik keşfi olmuş sayma; açık skill yolu kullanılabilir.
-[Skill sözleşmesi](../skills/proje-baslat/SKILL.md).
+[Skill sözleşmesi](../skills/orvant/SKILL.md).
 
 ## 2. Hazır şema 3 örneğiyle kurulumu deneme
 
@@ -65,7 +65,7 @@ modelini ve açıkça kurmaca deneyleri taşır; kendi projenin kabul edilmiş k
 olarak kopyalama. Kayıt kurmak uygulamayı veya belge çıktılarını üretmez.
 
 ```sh
-python3 skills/proje-baslat/scripts/project.py init ../benim-yeni-projem --spec examples/deney-defteri.json
+python3 skills/orvant/scripts/project.py init ../benim-yeni-projem --spec examples/deney-defteri.json
 python3 ../benim-yeni-projem/.project/scripts/project.py check ../benim-yeni-projem
 python3 ../benim-yeni-projem/.project/scripts/project.py context ../benim-yeni-projem
 python3 ../benim-yeni-projem/.project/scripts/project.py ontology ../benim-yeni-projem
@@ -74,7 +74,7 @@ python3 ../benim-yeni-projem/.project/scripts/project.py ontology ../benim-yeni-
 Türler ile somut deneyleri ve görev girdilerini birlikte incele. `.project/ONTOLOJİ.md`
 aynı modelin üretilen görünümüdür. Kayıtta adı geçen ama henüz üretilmemiş belge
 ve uygulama çıktıları ilgili görevlerde hazırlanır; var veya kabul edilmiş sayılmaz.
-Tam, daha küçük bir spec [model belgesinde](../skills/proje-baslat/references/model.md)
+Tam, daha küçük bir spec [model belgesinde](../skills/orvant/references/model.md)
 bulunur. `examples/ai-karsilastirma.json` eski şema örneğidir; yeni ontoloji
 özelliklerini tek başına etkinleştirmez.
 
@@ -143,8 +143,8 @@ kullan. Yalnız gerçekten incelenmiş dallar `reviewed_supports` ile kabul edil
 Karşılaştırılabilirlik gibi dar veri koşulları `acceptance_rules` ile denetlenir;
 ilişki adına bakarak doğruluk veya kaynak yeterliliği çıkarılmaz.
 
-[Tam işlem örnekleri](../skills/proje-baslat/references/plan-changes.md) ·
-[Ontoloji modelleme rehberi](../skills/proje-baslat/references/ontology.md).
+[Tam işlem örnekleri](../skills/orvant/references/plan-changes.md) ·
+[Ontoloji modelleme rehberi](../skills/orvant/references/ontology.md).
 
 ## 5. Yeni oturumda devam
 
@@ -189,7 +189,7 @@ Kaynak skill'in güncellenmesi projeye kopyalanmış runtime'ı kendiliğinden y
 Kaynak depodan:
 
 ```sh
-python3 skills/proje-baslat/scripts/project.py upgrade ../benim-yeni-projem
+python3 skills/orvant/scripts/project.py upgrade ../benim-yeni-projem
 python3 ../benim-yeni-projem/.project/scripts/project.py context ../benim-yeni-projem --json
 ```
 
@@ -214,7 +214,7 @@ mevcut her görev için açık konu/girdi/çıktı eşlemesi gerekir. Preview il
 apply eski state'in tam yedeğini `.project/migration-backups/` içine koyar.
 Önceki görevler/kanıtlar geçmişte korunur, aktif kabul yeni alan modeli için yeniden
 incelemeye açılır. Genel hedef değişikliği veya görev iptal eylemi yoktur.
-[Geçiş ve kurtarma ayrıntısı](../skills/proje-baslat/references/plan-changes.md).
+[Geçiş ve kurtarma ayrıntısı](../skills/orvant/references/plan-changes.md).
 
 ## 8. Yedek ve yeniden doğrulama
 

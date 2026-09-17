@@ -1,9 +1,9 @@
 ---
-name: proje-baslat
+name: orvant
 description: Projeyi hedef, alan ontolojisi, somut kayıtlar, görevler ve kanıtlarla kur veya mevcut projede devam et. Türleri ve ilişkileri modelleme, hangi çıktının neye dayandığını sorgulama ve değişikliğin etkisini inceleyerek işi sürdürme isteklerinde kullan.
 ---
 
-# Proje Başlat
+# Orvant
 
 v0.3 yerel çalışma modeli; Python 3.10+ gerekir; Windows, macOS ve Linux için tasarlanmıştır. Kullanıcıya JSON
 doldurtma. Konuşmayı doğrulanabilen bir alan modeline ve yapılabilir işlere çevir;
@@ -19,8 +19,8 @@ alıntılanmış yorumlayıcı yolunu `&` ile çağır. Bash, WSL ve symlink zor
 JSON dosyalarını UTF-8 yaz; UTF-8 BOM da okunur. Kayıtlardaki dosya yollarını
 `çıktılar/rapor.md` gibi proje köküne göre `/` ile sakla; mutlak Windows yollarını
 yalnız CLI'nin proje/spec/event argümanlarında kullan.
-Windows klonunda `.agents/skills/proje-baslat` bağlantısı açılmazsa bu gerçek
-`skills/proje-baslat/SKILL.md` dosyasını doğrudan oku.
+Windows klonunda `.agents/skills/orvant` bağlantısı açılmazsa bu gerçek
+`skills/orvant/SKILL.md` dosyasını doğrudan oku.
 
 ## Başlangıç mı, devam mı?
 

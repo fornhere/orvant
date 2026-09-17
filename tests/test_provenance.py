@@ -10,7 +10,7 @@ import unittest
 from ontology_fixtures import build_notebook, event, link, prop, relation_type, task
 
 REPO = Path(__file__).resolve().parents[1]
-SCRIPTS = REPO / "skills" / "proje-baslat" / "scripts"
+SCRIPTS = REPO / "skills" / "orvant" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import core
 

@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/proje-baslat/scripts'
+SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/orvant/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import core
 import project

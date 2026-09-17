@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
-CLI = REPO / 'skills/proje-baslat/scripts/project.py'
+CLI = REPO / 'skills/orvant/scripts/project.py'
 
 
 def run_demo(root):
