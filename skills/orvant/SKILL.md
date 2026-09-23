@@ -119,6 +119,13 @@ girdileri, etkili alan bağlarını ve `file` özelliklerini kapsar; gizli bağ�
 keşfetmez.
 Hash eşleşmesi içerik doğruluğu veya insan kabulü değildir.
 
+Kaynaklı bir iddianın anlamını incelemek gerektiğinde, [Jev kaynak–iddia
+danışmanını](references/jev-review.md) isteğe bağlı kullan. Önce yerel kaynak
+bağını, dosya hash'ini ve birebir alıntıyı doğrula. Jev çağrısı ancak kaynak
+metninin dış sağlayıcıya gönderilmesi açıkça yetkiliyse `shadow` modunda ve
+`--send-source` bayrağıyla yapılır; varsayılan `off`tur. Çıktı yalnız danışman
+görüşüdür: `complete_task`, insan kabulü veya kanıt kaydı yerine geçmez.
+
 Geçmiş deneyin “o günkü koşullarda ne ürettiğini” korumak için yeni komut/ölçüt
 sürümüne yeni nesne kimliği ve yeni deney bağla. Tarihsel kayıt türlerinde
 `immutable: true` kullan; özellik/tür/silme değişikliği yerine yeni sürüm oluştur.
