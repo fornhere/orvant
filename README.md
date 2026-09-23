@@ -94,6 +94,11 @@ Yeni bir ihtiyaç geldiğinde ajan önce değişikliğin etkisini gösterir, son
 
 **Teknik kontrolün geçmesi ile senin ürünü faydalı bulman ayrı şeylerdir.** Gerçek kullanıcı denemesi gerekiyorsa ayrı görev ve geri bildirim olarak tutulur. Projeyi başlatmak, uygulamanın geliştirilmiş veya yayımlanmış olduğu anlamına gelmez.
 
+Kaynaklı bir iddiayı incelerken isteğe bağlı Jev danışmanı da kullanılabilir.
+Komut önce kayıtlı kaynak bağını, dosya sürümünü ve birebir alıntıyı kontrol
+eder; Jev'e metin göndermek ayrıca açıkça seçilir. Sonuç görev durumunu
+değiştirmez veya insan kabulü yerine geçmez. [Kullanım ve sınırlar](skills/orvant/references/jev-review.md).
+
 <a id="ontoloji-nedir"></a>
 
 ## Ontoloji nedir? Bir etkinlik üzerinden düşün
