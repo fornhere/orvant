@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gelişim gözlem olayı",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "t", "proje", "kosu", "aktor", "katman", "is_turu", "sonuc", "maliyet", "orvant_surumu", "mudahale", "benzetim", "ozet", "kanit", "ham", "yurutme_id", "miras"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[0-9a-f]{16}([0-9a-f]{16})?$"},
+    "t": {"type": "string", "format": "date-time"},
+    "proje": {"type": "string", "minLength": 1},
+    "kosu": {"type": ["string", "null"]},
+    "yurutme_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{16}$"},
+    "miras": {"type": "boolean"},
+    "aktor": {"type": "object", "additionalProperties": false, "required": ["tur", "kimlik"], "properties": {"tur": {"enum": ["orvant", "opus", "kullanici", "kullanici_benzetim", "codex", "dogrulayici"]}, "kimlik": {"type": "string", "minLength": 1}}},
+    "katman": {"enum": ["operator", "isci", "kapi", "kayit"]},
+    "is_turu": {"enum": ["hedef_netlestirme", "karar_belgesi", "is_bolme", "brief_yazma", "yurutucu_secimi", "calisma_alani", "baslatma_izleme", "dogrulama", "ariza_teshisi", "yeniden_is_kapsami", "yontem_gelistirme", "birlestirme", "yetki_karari", "olcum", "raporlama", "arastirma", "isci_kosusu", "kapi_karari", "orvant_kayit"]},
+    "sonuc": {"enum": ["ok", "ret", "hata", "zaman_asimi", "iptal", "bilinmiyor"]},
+    "maliyet": {"type": "object", "additionalProperties": false, "required": ["girdi_token", "onbellek_token", "cikti_token", "saniye", "insan_dakika"], "properties": {"girdi_token": {"type": ["integer", "null"], "minimum": 0}, "onbellek_token": {"type": ["integer", "null"], "minimum": 0}, "cikti_token": {"type": ["integer", "null"], "minimum": 0}, "saniye": {"type": ["number", "null"], "minimum": 0}, "insan_dakika": {"type": ["number", "null"], "minimum": 0}}},
+    "orvant_surumu": {"type": "string", "minLength": 1},
+    "mudahale": {"type": "boolean"},
+    "benzetim": {"type": "boolean"},
+    "ozet": {"type": "string"},
+    "kanit": {"type": "array", "items": {"type": "string"}},
+    "ham": {"type": "object"}
+  }
+}

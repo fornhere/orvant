@@ -1,0 +1,79 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "iddialar": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "iddia": {
+            "type": "string"
+          },
+          "kaynak_turu": {
+            "type": "string",
+            "enum": [
+              "kullanici",
+              "resmi_dokuman",
+              "kaynak_kodu",
+              "yerel_gozlem",
+              "ucuncu_taraf"
+            ]
+          },
+          "dogrulama": {
+            "type": "string",
+            "enum": [
+              "belgelenmis",
+              "yerelde_gozlendi",
+              "varsayim",
+              "bilinmiyor",
+              "celiskili"
+            ]
+          },
+          "kaynak": {
+            "type": "string"
+          },
+          "surum": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "erisim_tarihi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kapsam": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "iddia",
+          "kaynak_turu",
+          "dogrulama",
+          "kaynak",
+          "surum",
+          "erisim_tarihi",
+          "kapsam"
+        ]
+      }
+    },
+    "yoklama_istekleri": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "iddialar",
+    "yoklama_istekleri"
+  ]
+}

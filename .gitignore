@@ -1,13 +1,7 @@
 __pycache__/
-*.pyc
-.pytest_cache/
-demo/.project/.tmp-*
-
-# Yerel çalışma arşivleri ve içerik üretimi dağıtım paketine girmez.
-/BRIEF.md
-/arastirma/
-/denemeler/
-/dogrulama/
-/demo/
-/sunumlar/
-/eleştiri-takimi/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+/.venv/
+/.project/

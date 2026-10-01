@@ -1,0 +1,130 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "gereksinimler": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metin": {
+            "type": "string"
+          },
+          "kaynak_turu": {
+            "type": "string",
+            "enum": [
+              "kullanici",
+              "iddia",
+              "onerilen_varsayim"
+            ]
+          },
+          "kaynak_id": {
+            "type": "string"
+          },
+          "model_kimligi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dayanak_olay_id": {
+            "type": "string"
+          },
+          "dayanak_alinti": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "metin",
+          "kaynak_turu",
+          "kaynak_id",
+          "model_kimligi",
+          "dayanak_olay_id",
+          "dayanak_alinti"
+        ]
+      }
+    },
+    "kabul_olcutleri": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metin": {
+            "type": "string"
+          },
+          "tur": {
+            "type": "string",
+            "enum": [
+              "deterministik",
+              "insan_incelemesi"
+            ]
+          },
+          "kehanet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rubrik": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inceleyen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_kimligi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dayanak_olay_id": {
+            "type": "string"
+          },
+          "dayanak_alinti": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "metin",
+          "tur",
+          "kehanet",
+          "rubrik",
+          "inceleyen",
+          "model_kimligi",
+          "dayanak_olay_id",
+          "dayanak_alinti"
+        ]
+      }
+    },
+    "eksikler": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "gereksinimler",
+    "kabul_olcutleri",
+    "eksikler"
+  ]
+}

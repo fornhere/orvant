@@ -1,0 +1,245 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "islemler"
+  ],
+  "properties": {
+    "islemler": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "islem",
+          "gorev",
+          "yeni_gorev",
+          "bagimlilik",
+          "kalip",
+          "token",
+          "deneme",
+          "gerekce",
+          "yetki_istegi"
+        ],
+        "properties": {
+          "islem": {
+            "type": "string",
+            "enum": [
+              "gorev_ekle",
+              "bagimlilik_ekle",
+              "yazilabilir_ekle",
+              "butce_artir",
+              "yetki_istegi_ekle"
+            ]
+          },
+          "gorev": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "yeni_gorev": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "baslik",
+              "amac",
+              "bagimliliklar",
+              "yazilabilir",
+              "kabul",
+              "yetki_istek_ids",
+              "bekleyen_kararlar",
+              "butce",
+              "durum"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "baslik": {
+                "type": "string"
+              },
+              "amac": {
+                "type": "string"
+              },
+              "bagimliliklar": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "yazilabilir": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kabul": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "sozlesme_kabul_id",
+                    "tur",
+                    "komut",
+                    "beklenen",
+                    "rubrik"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "sozlesme_kabul_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "tur": {
+                      "type": "string",
+                      "enum": [
+                        "komut",
+                        "insan_incelemesi"
+                      ]
+                    },
+                    "komut": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "beklenen": {
+                      "type": "string"
+                    },
+                    "rubrik": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "yetki_istek_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bekleyen_kararlar": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "butce": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "token",
+                  "deneme"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "integer"
+                  },
+                  "deneme": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "durum": {
+                "type": "string",
+                "enum": [
+                  "hazir",
+                  "bekliyor",
+                  "yetki_bekliyor",
+                  "girdi_bekliyor",
+                  "karar_bekliyor",
+                  "kosuyor",
+                  "inceleme_bekliyor",
+                  "kabul",
+                  "ret",
+                  "engelli"
+                ]
+              }
+            }
+          },
+          "bagimlilik": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kalip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "deneme": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gerekce": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "yetki_istegi": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "eylem",
+              "ayrinti",
+              "gerekce"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "eylem": {
+                "type": "string",
+                "enum": [
+                  "kurulum",
+                  "indirme",
+                  "veri_aktarimi",
+                  "yayin",
+                  "para",
+                  "silme",
+                  "dis_sistem_yapilandirma",
+                  "ag_erisimi"
+                ]
+              },
+              "ayrinti": {
+                "type": "string"
+              },
+              "gerekce": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

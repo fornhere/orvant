@@ -1,19 +1,26 @@
 ---
 name: orvant
-description: Projeyi hedef, alan ontolojisi, somut kayıtlar, görevler ve kanıtlarla kur veya mevcut projede devam et. Türleri ve ilişkileri modelleme, hangi çıktının neye dayandığını sorgulama ve değişikliğin etkisini inceleyerek işi sürdürme isteklerinde kullan.
+description: Yazılım projesini hedefinden mevcut CLI motoruyla planla, bağımsız kapıyla yürüt ve kayıtlı oturumdan sürdür. Projeyi alan ontolojisi, somut kayıtlar, görevler ve kanıtlarla kurma; çıktıların dayanaklarını ve değişiklik etkisini inceleme isteklerinde de kullan.
 ---
 
 # Orvant
 
-v0.3 yerel çalışma modeli; Python 3.10+ gerekir; Windows, macOS ve Linux için tasarlanmıştır. Kullanıcıya JSON
-doldurtma. Konuşmayı doğrulanabilen bir alan modeline ve yapılabilir işlere çevir;
-mevcut projede modeli kullanarak soruları cevapla, değişimi incele ve işe devam et.
+Yazılım geliştirme ve işi sonuca ulaştırma isteğinde [motor akışını](references/engine.md)
+oku ve uygula: hedef → S1 soruları ve gerçek sözleşme onayı → ilk S2 planı →
+`surdur` → sonuç veya karar sorusu → aynı oturumdan devam. Kullanıcıya JSON
+doldurtma veya her görevi elle seçtirme.
 
-## İşletim sistemi ve komutlar
+v0.3 `.project` yerel kayıt/ontoloji modeli Python 3.10+ ile Windows, macOS ve
+Linux içindir. Yürütme motoru ayrı bileşendir: Python 3.11+, Git ve gerçek koşuda
+Codex CLI gerekir; Linux'ta geliştirilmiştir, motor CI'ı Ubuntu'dadır.
+macOS/Windows motor desteği sınanmış değildir. Kayıt modeliyle konuşmayı
+doğrulanabilen nesne ve ilişkilere çevir, soruları cevapla ve değişimi incele.
+
+## Kayıt için işletim sistemi ve komutlar
 
 macOS/Linux'ta `python3 --version`, Windows PowerShell'de `py -3 --version`
 ile Python 3.10+ bulunduğunu doğrula. Windows'ta `py` yoksa `python --version`
-dene. Aşağıdaki ve referanslardaki `python3` komutlarını bulunan yorumlayıcıyla
+dene. Aşağıdaki kayıt komutlarını ve kayıt referanslarını bulunan yorumlayıcıyla
 çalıştır; Windows için `py -3` kullan. Boşluklu yolları tırnakla; PowerShell'de
 alıntılanmış yorumlayıcı yolunu `&` ile çağır. Bash, WSL ve symlink zorunlu değildir.
 JSON dosyalarını UTF-8 yaz; UTF-8 BOM da okunur. Kayıtlardaki dosya yollarını
@@ -25,14 +32,39 @@ Windows klonunda `.agents/skills/orvant` bağlantısı açılmazsa bu gerçek
 ## Başlangıç mı, devam mı?
 
 Hedef klasörü, AGENTS.md/AGENTS.override.md ve ilgili proje özetini incele.
+Yazılım yürütme isteğinde önce bu projeye bağlı motor oturumunu kayıtlı yoldan
+bul; hedefi, sözleşmeyi ve varsa planın depo yolunu karşılaştır. Motor oturumu
+varsa onu sürdür, sessizce yeni oturum kurma. Motor rehberindeki dört başlangıcı
+ayırt et: oturum yok, onaysız S1, onaylı S1 ama plan yok, mevcut plan.
+
 `.project/state.json` varsa önce projeye kopyalı betikle `context` çalıştır.
 Eski kayıtları yeniden kurma. Şema 1/2 okunabilir ama tür kuralları ve alan etkisi
 yoktur; ontoloji gerekiyorsa [geçiş akışını](references/plan-changes.md) kullan.
+`.project` kaydı motorun onaylı sözleşmesi değildir; kayıt kurulması yazılımı
+yürütmez veya motor kabulü üretmez. Yalnız kayıt/ontoloji isteniyorsa aşağıdaki
+kayıt akışını kullan; iki kayıt birlikte varsa her birinin durumunu kendi CLI'sinden oku.
 
 Hedef, kullanıcı, ilk somut çıktı ve başarı ölçütlerinden sonucu değiştiren
 belirsizliği sor. Küçük uygulama tercihlerini gerekçelendir; tarih, bütçe veya
 teknoloji tercihi uydurma. Bilinmeyenleri `open_questions`, kabul edilmemiş
 önerileri `proposed` karar yap. Eski notu veya ajan önerisini kullanıcı kararı sayma.
+
+## Yazılım projesini motorla yürüt
+
+Motor rehberinde gerçek skill dizininden kaynak `engine/` yolunu veya kurulu
+motor CLI'sini ve yorumlayıcısını doğrula; kullanıcının çalışma dizininden motor
+yolu türetme. S1'in `ilerle` adımlarını gerçek soru veya revizyon onayına kadar
+yürüt. `cevapla`, `onayla` ve izin/karar komutları gerçek kullanıcı kararını kayda
+taşır; sırayı tamamlamak için cevap veya onay uydurma. Önceden verilen uygun
+yetkiyi yeniden isteme, fakat motor olay kaydı aynı kapsam ve revizyonun gerçek
+taahhüdüne dayanmalı.
+
+Onaylı S1'de ilk `mimar plan` çağrısını skill'i kullanan ajan yapar; mevcut planda
+bu adımı tekrar etme. `surdur` ilk S1/S2'yi başlatmaz; mevcut planın hazır ve
+yetkili işlerini seçer, gerekli kehaneti işçiden önce hazırlar ve kapıdan geçirir.
+Kullanıcıya yalnız kuyruğun gerçek karar/izin sorularını taşı. Açık soru, sınırda
+durma veya işçinin `complete` sözü başarı değildir; kabul kapı kararına dayanır.
+Skill'in çağırdığı komutları motorun kendiliğinden yaptığı iş diye raporlama.
 
 ## Alanı modelle
 
@@ -53,7 +85,7 @@ ve kayıt hazırlarken [model sözleşmesini](references/model.md) oku.
 - Kullanıcı kararında `source` kısa kaynak özeti olsun. Yetkin kapsamındaki
   uygulama kararında `accepted_by: agent` kullan; insan kabulünü kendin verme.
 
-İlişki adı mantıksal ispat değildir. Motor ilan edilen tür/bağ kurallarını ve
+İlişki adı mantıksal ispat değildir. Kayıt runtime'ı ilan edilen tür/bağ kurallarını ve
 etki yönünü işletir; `supports` yazısından doğruluk, alternatif kaynak yeterliliği
 veya kullanım izni çıkarmaz. Kaynaklı iddiaları ilgili pasaj ve dar iddia üzerinden
 incele. Desteğin kaybolması tek başına iddianın yanlış olduğu anlamına gelmez.

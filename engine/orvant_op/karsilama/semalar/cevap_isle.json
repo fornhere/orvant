@@ -1,0 +1,427 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "guncellemeler": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "durum": {
+            "type": "string",
+            "enum": [
+              "acik",
+              "cozuldu",
+              "ertelendi"
+            ]
+          },
+          "deger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kaynak_olay_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "erteleme_gerekcesi": {
+            "description": "Koşullu/ertelenmiş cevapta kullanıcı cevabını birebir ve kararın bağlı olduğu sonraki aşamayı yaz; ertelenen karar için yeni soru üretme.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "soru": {
+            "description": "durum=ertelendi ise mevcut soru nesnesini koru; yeniden netleştirme sorusu yalnız diğer açık kararlar içindir.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "metin": {
+                "type": "string",
+                "minLength": 1
+              },
+              "neden_onemli": {
+                "type": "string"
+              },
+              "secenekler": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "onerilen": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "metin",
+              "neden_onemli",
+              "secenekler",
+              "onerilen"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "durum",
+          "deger",
+          "kaynak_olay_id",
+          "erteleme_gerekcesi",
+          "soru"
+        ]
+      }
+    },
+    "gereksinimler": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metin": {
+            "type": "string"
+          },
+          "kaynak_turu": {
+            "type": "string",
+            "enum": [
+              "kullanici",
+              "iddia",
+              "onerilen_varsayim"
+            ]
+          },
+          "kaynak_id": {
+            "type": "string"
+          },
+          "model_kimligi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "metin",
+          "kaynak_turu",
+          "kaynak_id",
+          "model_kimligi"
+        ]
+      }
+    },
+    "kabul_olcutleri": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metin": {
+            "type": "string"
+          },
+          "tur": {
+            "type": "string",
+            "enum": [
+              "deterministik",
+              "insan_incelemesi"
+            ]
+          },
+          "kehanet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rubrik": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inceleyen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_kimligi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "metin",
+          "tur",
+          "kehanet",
+          "rubrik",
+          "inceleyen",
+          "model_kimligi"
+        ]
+      }
+    },
+    "izinler": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "eylem": {
+            "type": "string"
+          },
+          "kaynak": {
+            "type": "string"
+          },
+          "kapsam": {
+            "type": "string"
+          },
+          "veri_sinifi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hedef": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "butce": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "onay_olay_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_kimligi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eylem",
+          "kaynak",
+          "kapsam",
+          "veri_sinifi",
+          "hedef",
+          "butce",
+          "sure",
+          "onay_olay_id",
+          "model_kimligi",
+          "id"
+        ]
+      }
+    },
+    "yeni_kararlar": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "baslik": {
+            "type": "string"
+          },
+          "kategori": {
+            "type": "string",
+            "enum": [
+              "islevsel_kapsam",
+              "veri_modeli",
+              "etkilesim",
+              "kalite_nitelikleri",
+              "dis_bagimliliklar",
+              "uc_durumlar",
+              "kisitlar",
+              "terimler",
+              "tamamlanma_olcutleri",
+              "yetki",
+              "veri_aktarimi"
+            ]
+          },
+          "sahip": {
+            "type": "string",
+            "enum": [
+              "kullanici",
+              "arastirilabilir",
+              "varsayilan"
+            ]
+          },
+          "etki": {
+            "type": "string",
+            "enum": [
+              "yuksek",
+              "orta",
+              "dusuk"
+            ]
+          },
+          "belirsizlik": {
+            "type": "string",
+            "enum": [
+              "yuksek",
+              "orta",
+              "dusuk"
+            ]
+          },
+          "geri_alinabilir": {
+            "type": "boolean"
+          },
+          "onerilen_varsayim": {
+            "type": "string"
+          },
+          "soru": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "metin": {
+                "type": "string"
+              },
+              "neden_onemli": {
+                "type": "string"
+              },
+              "secenekler": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "onerilen": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "metin",
+              "neden_onemli",
+              "secenekler",
+              "onerilen"
+            ]
+          },
+          "durum": {
+            "type": "string",
+            "enum": [
+              "acik",
+              "cozuldu",
+              "ertelendi"
+            ]
+          },
+          "deger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kaynak_olay_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dayanak_iddia_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "erteleme_gerekcesi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "etkiledigi_kararlar": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kontrol_boyutlari": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+              ]
+            }
+          },
+          "kaynak": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "baslik",
+          "kategori",
+          "sahip",
+          "etki",
+          "belirsizlik",
+          "geri_alinabilir",
+          "onerilen_varsayim",
+          "soru",
+          "durum",
+          "deger",
+          "kaynak_olay_id",
+          "dayanak_iddia_ids",
+          "erteleme_gerekcesi",
+          "etkiledigi_kararlar",
+          "kontrol_boyutlari",
+          "kaynak"
+        ]
+      }
+    },
+    "yeni_arastirma_konulari": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "guncellemeler",
+    "gereksinimler",
+    "kabul_olcutleri",
+    "izinler",
+    "yeni_kararlar",
+    "yeni_arastirma_konulari"
+  ]
+}

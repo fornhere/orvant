@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orvant"
+version = "0.1.0b1"
+description = "A project runner with independent acceptance gates for agent work."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+license = "MIT"
+
+[project.scripts]
+orvant = "orvant_op.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "engine"}
+
+[tool.setuptools.packages.find]
+where = ["engine"]
+include = ["orvant_op*", "orvant_gelisim*"]
+exclude = ["orvant_op.tekrar*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"orvant_op" = ["*.json", "karsilama/semalar/*.json", "mimar/*.json"]
+"orvant_gelisim" = ["sema/*.json"]

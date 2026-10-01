@@ -1,0 +1,1 @@
+"""Orvant operator yetenekleri."""
