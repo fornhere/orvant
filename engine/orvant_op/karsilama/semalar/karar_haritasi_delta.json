@@ -1,0 +1,360 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "guncellenen_kararlar": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "baslik": {
+            "type": "string"
+          },
+          "kategori": {
+            "type": "string",
+            "enum": [
+              "islevsel_kapsam",
+              "veri_modeli",
+              "etkilesim",
+              "kalite_nitelikleri",
+              "dis_bagimliliklar",
+              "uc_durumlar",
+              "kisitlar",
+              "terimler",
+              "tamamlanma_olcutleri",
+              "yetki",
+              "veri_aktarimi"
+            ]
+          },
+          "sahip": {
+            "type": "string",
+            "enum": [
+              "kullanici",
+              "arastirilabilir",
+              "varsayilan"
+            ]
+          },
+          "etki": {
+            "type": "string",
+            "enum": [
+              "yuksek",
+              "orta",
+              "dusuk"
+            ]
+          },
+          "belirsizlik": {
+            "type": "string",
+            "enum": [
+              "yuksek",
+              "orta",
+              "dusuk"
+            ]
+          },
+          "geri_alinabilir": {
+            "type": "boolean"
+          },
+          "onerilen_varsayim": {
+            "type": "string"
+          },
+          "soru": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "metin": {
+                "type": "string"
+              },
+              "neden_onemli": {
+                "type": "string"
+              },
+              "secenekler": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "onerilen": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "metin",
+              "neden_onemli",
+              "secenekler",
+              "onerilen"
+            ]
+          },
+          "durum": {
+            "type": "string",
+            "enum": [
+              "acik",
+              "cozuldu",
+              "ertelendi"
+            ]
+          },
+          "deger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kaynak_olay_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dayanak_iddia_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "erteleme_gerekcesi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "etkiledigi_kararlar": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kontrol_boyutlari": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+              ]
+            }
+          },
+          "kaynak": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "baslik",
+          "kategori",
+          "sahip",
+          "etki",
+          "belirsizlik",
+          "geri_alinabilir",
+          "onerilen_varsayim",
+          "soru",
+          "durum",
+          "deger",
+          "kaynak_olay_id",
+          "dayanak_iddia_ids",
+          "erteleme_gerekcesi",
+          "etkiledigi_kararlar",
+          "kontrol_boyutlari",
+          "kaynak"
+        ]
+      }
+    },
+    "yeni_kararlar": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "baslik": {
+            "type": "string"
+          },
+          "kategori": {
+            "type": "string",
+            "enum": [
+              "islevsel_kapsam",
+              "veri_modeli",
+              "etkilesim",
+              "kalite_nitelikleri",
+              "dis_bagimliliklar",
+              "uc_durumlar",
+              "kisitlar",
+              "terimler",
+              "tamamlanma_olcutleri",
+              "yetki",
+              "veri_aktarimi"
+            ]
+          },
+          "sahip": {
+            "type": "string",
+            "enum": [
+              "kullanici",
+              "arastirilabilir",
+              "varsayilan"
+            ]
+          },
+          "etki": {
+            "type": "string",
+            "enum": [
+              "yuksek",
+              "orta",
+              "dusuk"
+            ]
+          },
+          "belirsizlik": {
+            "type": "string",
+            "enum": [
+              "yuksek",
+              "orta",
+              "dusuk"
+            ]
+          },
+          "geri_alinabilir": {
+            "type": "boolean"
+          },
+          "onerilen_varsayim": {
+            "type": "string"
+          },
+          "soru": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "metin": {
+                "type": "string"
+              },
+              "neden_onemli": {
+                "type": "string"
+              },
+              "secenekler": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "onerilen": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "metin",
+              "neden_onemli",
+              "secenekler",
+              "onerilen"
+            ]
+          },
+          "durum": {
+            "type": "string",
+            "enum": [
+              "acik",
+              "cozuldu",
+              "ertelendi"
+            ]
+          },
+          "deger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kaynak_olay_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dayanak_iddia_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "erteleme_gerekcesi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "etkiledigi_kararlar": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kontrol_boyutlari": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+              ]
+            }
+          },
+          "kaynak": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "baslik",
+          "kategori",
+          "sahip",
+          "etki",
+          "belirsizlik",
+          "geri_alinabilir",
+          "onerilen_varsayim",
+          "soru",
+          "durum",
+          "deger",
+          "kaynak_olay_id",
+          "dayanak_iddia_ids",
+          "erteleme_gerekcesi",
+          "etkiledigi_kararlar",
+          "kontrol_boyutlari",
+          "kaynak"
+        ]
+      }
+    },
+    "kaldirilan_karar_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "arama_istekleri": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "guncellenen_kararlar",
+    "yeni_kararlar",
+    "kaldirilan_karar_ids",
+    "arama_istekleri"
+  ]
+}

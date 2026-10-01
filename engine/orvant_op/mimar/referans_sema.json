@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "durum",
+    "neden",
+    "dosyalar"
+  ],
+  "properties": {
+    "durum": {
+      "type": "string",
+      "enum": [
+        "uretildi",
+        "atlandi"
+      ]
+    },
+    "neden": {
+      "type": "string"
+    },
+    "dosyalar": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "yol",
+          "icerik"
+        ],
+        "properties": {
+          "yol": {
+            "type": "string"
+          },
+          "icerik": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

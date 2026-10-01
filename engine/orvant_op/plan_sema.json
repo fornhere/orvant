@@ -1,0 +1,241 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "surum",
+    "sozlesme_revizyon",
+    "depo",
+    "gorevler",
+    "yetki_istekleri",
+    "kapsanmayan_kabul"
+  ],
+  "properties": {
+    "surum": {
+      "type": "integer"
+    },
+    "sozlesme_revizyon": {
+      "type": "integer"
+    },
+    "depo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "yol",
+        "gerekce"
+      ],
+      "properties": {
+        "yol": {
+          "type": "string"
+        },
+        "gerekce": {
+          "type": "string"
+        }
+      }
+    },
+    "gorevler": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "baslik",
+          "amac",
+          "bagimliliklar",
+          "yazilabilir",
+          "kabul",
+          "yetki_istek_ids",
+          "bekleyen_kararlar",
+          "butce",
+          "durum"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "baslik": {
+            "type": "string"
+          },
+          "amac": {
+            "type": "string"
+          },
+          "bagimliliklar": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "yazilabilir": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kabul": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sozlesme_kabul_id",
+                "tur",
+                "komut",
+                "beklenen",
+                "rubrik"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "sozlesme_kabul_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tur": {
+                  "type": "string",
+                  "enum": [
+                    "komut",
+                    "insan_incelemesi"
+                  ]
+                },
+                "komut": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "beklenen": {
+                  "type": "string"
+                },
+                "rubrik": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "yetki_istek_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bekleyen_kararlar": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "butce": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "token",
+              "deneme"
+            ],
+            "properties": {
+              "token": {
+                "type": "integer"
+              },
+              "deneme": {
+                "type": "integer"
+              }
+            }
+          },
+          "durum": {
+            "type": "string",
+            "enum": [
+              "hazir",
+              "bekliyor",
+              "yetki_bekliyor",
+              "girdi_bekliyor",
+              "karar_bekliyor",
+              "kosuyor",
+              "inceleme_bekliyor",
+              "kabul",
+              "ret",
+              "engelli"
+            ]
+          }
+        }
+      }
+    },
+    "yetki_istekleri": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "eylem",
+          "ayrinti",
+          "gerekce",
+          "durum",
+          "onay_olay_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "eylem": {
+            "type": "string",
+            "enum": [
+              "kurulum",
+              "indirme",
+              "veri_aktarimi",
+              "yayin",
+              "para",
+              "silme",
+              "dis_sistem_yapilandirma",
+              "ag_erisimi"
+            ]
+          },
+          "ayrinti": {
+            "type": "string"
+          },
+          "gerekce": {
+            "type": "string"
+          },
+          "durum": {
+            "type": "string",
+            "enum": [
+              "acik",
+              "verildi",
+              "reddedildi"
+            ]
+          },
+          "onay_olay_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "kapsanmayan_kabul": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sozlesme_kabul_id",
+          "gerekce"
+        ],
+        "properties": {
+          "sozlesme_kabul_id": {
+            "type": "string"
+          },
+          "gerekce": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
