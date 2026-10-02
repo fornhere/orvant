@@ -2,9 +2,43 @@
 
 # Orvant
 
+**Your coding agent says "done". Orvant asks for proof.**
+
+*Ajan "bitti" der; Orvant kanıt ister.*
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![Version 0.1.0b1](https://img.shields.io/badge/version-0.1.0b1%20beta-orange)
+
 Orvant connects project goals, domain objects, sources, decisions and tasks. For software projects, its Python engine coordinates Codex work and checks the result through an independent acceptance gate.
 
-**Open beta — 0.1.0b1.** Start with small Python CLIs, data automation or narrow repository maintenance. Broad autonomous project completion and reduced user effort have not been established.
+> **Open beta — 0.1.0b1.** Start with small Python CLIs, data automation or narrow repository maintenance. Broad autonomous project completion and reduced user effort have not been established.
+
+## Why it's different
+
+- **"Complete" is a claim, not a verdict.** A worker saying `complete` never establishes acceptance. Each result must pass an independent gate: the declared acceptance commands, the oracle (`kehanet`) run inside `codex sandbox`, and a check that the work stayed inside its writable scope.
+- **The test comes before the work.** The architect prepares independent oracle checks bound to the contract's requirements before anything executes. Applicable deliberately flawed outputs must be rejected before the oracle is accepted.
+- **You approve a contract, not a vibe.** Intake turns your goal into a decision map and real questions. Planning starts only after you approve the displayed contract revision.
+- **A failure gets a diagnosis, not a blind retry.** Failures are classified, with a proposed next step: retry, replan, wait for input or permission, or escalate to you.
+- **Each task stays in its lane.** Every task runs in its own git worktree, and real decision questions are collected in a queue for you instead of being guessed.
+
+## How it works
+
+```mermaid
+flowchart LR
+    K["karsila<br/>goal → questions → approved contract"] --> M["mimar<br/>task graph · permissions"]
+    M --> O["kehanet<br/>oracle prepared first,<br/>must reject flawed outputs"]
+    O --> Y["yurut<br/>Codex goal mode,<br/>one git worktree per task"]
+    Y --> G{"independent gate<br/>commands · oracle in sandbox · scope"}
+    G -- pass --> A["accepted"]
+    G -- fail --> T["teşhis<br/>retry · replan · wait · escalate"]
+    T -. retry .-> Y
+    T -. replan .-> M
+```
+
+Commands, identifiers and CLI messages are in Turkish: `orvant karsila` (intake), `orvant mimar` (architect), `orvant yurut` (execution). `orvant surdur` continues an existing plan within round, time and observed quota limits; it does not create the initial intake or plan.
+
+**[Quick start →](#install-the-engine)** · [Engine](docs/MOTOR.md) · [Usage](docs/KULLANIM.md) · [FAQ](docs/SSS.md) · [Beta scope](docs/BETA.md) · [Technical design](TEKNIK-TASARIM.md)
 
 ## Two components
 
