@@ -2,9 +2,43 @@
 
 # Orvant
 
+**Ajan "bitti" der; Orvant kanıt ister.**
+
+*Your coding agent says "done". Orvant asks for proof.*
+
+[![Lisans: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![Sürüm 0.1.0b1](https://img.shields.io/badge/version-0.1.0b1%20beta-orange)
+
 Orvant; hedefi, alan nesnelerini, kaynakları, kararları ve işleri birlikte tutar. Yazılım projelerinde Python motoru Codex işlerini yürütür ve sonucu bağımsız bir kabul kapısından geçirir.
 
-**Açık beta — 0.1.0b1.** İlk kapsam küçük Python CLI'ları, veri otomasyonu ve dar depo bakım işleridir. Genel proje otonomluğu veya kullanıcı emeğini azaltma iddiası henüz doğrulanmış değildir.
+> **Açık beta — 0.1.0b1.** İlk kapsam küçük Python CLI'ları, veri otomasyonu ve dar depo bakım işleridir. Genel proje otonomluğu veya kullanıcı emeğini azaltma iddiası henüz doğrulanmış değildir.
+
+## Neden farklı
+
+- **"Bitti" bir iddiadır, karar değil.** İşçinin `complete` demesi kabul değildir. Sonuç bağımsız kapıdan geçmelidir: ilan edilmiş kabul komutları, `codex sandbox` içinde çalışan kehanet ve yazma kapsamı denetimi.
+- **Sınav işten önce gelir.** Mimar, yürütmeden önce sözleşmenin gereksinimlerine bağlı bağımsız kehanet kontrollerini hazırlar. Uygulanabilir kasıtlı kusurlu çıktılar reddedilmeden kehanet kabul edilmez.
+- **Onayladığın şey bir sözleşmedir.** Karşılama hedefini karar haritasına ve gerçek sorulara çevirir. Plan ancak gösterilen sözleşme revizyonunu onayladıktan sonra başlar.
+- **Başarısızlık teşhis edilir, körlemesine tekrarlanmaz.** Neden sınıflanır ve sonraki adım önerilir: yeniden dene, yeniden planla, girdi/izin bekle ya da sana taşı.
+- **Her görev kendi şeridinde.** Her görev ayrı bir git worktree'sinde yürür; gerçek karar soruları tahmin edilmez, senin için kuyrukta toplanır.
+
+## Nasıl çalışır
+
+```mermaid
+flowchart LR
+    K["karsila<br/>hedef → sorular → onaylı sözleşme"] --> M["mimar<br/>görev grafiği · yetkiler"]
+    M --> O["kehanet<br/>işten önce hazırlanır,<br/>kusurlu çıktıyı reddetmeli"]
+    O --> Y["yurut<br/>Codex goal modu,<br/>görev başına git worktree"]
+    Y --> G{"bağımsız kapı<br/>komutlar · sandbox'ta kehanet · kapsam"}
+    G -- geçer --> A["kabul"]
+    G -- kalır --> T["teşhis<br/>yeniden dene · yeniden planla · bekle · sana taşı"]
+    T -. yeniden dene .-> Y
+    T -. yeniden planla .-> M
+```
+
+`orvant surdur` mevcut planı tur, süre ve gözlenen kota sınırları içinde sürdürür; ilk karşılamayı veya planı oluşturmaz.
+
+**[Hızlı başlangıç →](#kurulum)** · [Motor](docs/MOTOR.md) · [Kullanım](docs/KULLANIM.md) · [SSS](docs/SSS.md) · [Beta kapsamı](docs/BETA.md) · [Teknik tasarım](TEKNIK-TASARIM.md)
 
 ## Skill ve motor
 
