@@ -1,0 +1,47 @@
+{
+  "schema_version": 3,
+  "revision": 0,
+  "project": {
+    "id": "ornek-inceleme",
+    "name": "Sentetik çıktı incelemesi",
+    "goal": "Bir örnek metnin incelemesini ve dayanağını izlemek",
+    "audience": "Örneği deneyen kullanıcı",
+    "scope": ["Yerel metin ve inceleme"],
+    "out_of_scope": ["Gerçek model performansı iddiası"],
+    "constraints": ["Örnek veri kurmacadır"],
+    "open_questions": []
+  },
+  "ontology": {
+    "object_types": [
+      {"id": "input", "label": "İncelenen metin", "properties": {
+        "text": {"type": "string", "required": true, "enum": null}
+      }},
+      {"id": "assessment", "label": "İnceleme", "properties": {
+        "verdict": {"type": "string", "required": true, "enum": ["pending", "pass", "fail"]}
+      }}
+    ],
+    "relation_types": [
+      {"id": "examines", "label": "İnceler", "from_type": "assessment", "to_type": "input",
+       "from_min": 1, "from_max": 1, "to_min": 0, "to_max": null, "impact": "reverse"}
+    ]
+  },
+  "objects": [
+    {"id": "metin-a", "type": "input", "label": "Kurmaca metin A", "properties": {"text": "Bugün aynı komutu iki kez denedim."}},
+    {"id": "inceleme-a", "type": "assessment", "label": "Metin A incelemesi", "properties": {"verdict": "pending"}}
+  ],
+  "relations": [
+    {"id": "bag-inceleme-a", "from": "inceleme-a", "type": "examines", "to": "metin-a"}
+  ],
+  "tasks": [
+    {"id": "T-INCELE", "title": "Örnek metnin tek cümle oluşunu incele", "status": "todo",
+     "object_ids": ["metin-a", "inceleme-a"], "input_ids": ["metin-a"], "output_ids": ["inceleme-a"],
+     "depends_on": [], "decision_ids": [], "acceptance": ["Metin ve tek cümle ölçütü incelenmiş; sonuç gerekçesiyle kaydedilmiş."],
+     "evidence": [], "input_snapshot": null, "generation": 0, "review_reasons": []},
+    {"id": "T-KONTROL", "title": "İnceleme gerekçesini kontrol et", "status": "todo",
+     "object_ids": ["inceleme-a"], "input_ids": ["inceleme-a"], "output_ids": [],
+     "depends_on": [], "decision_ids": [], "acceptance": ["Gerekçenin kayıtlı metinle uyumu gerçekten incelenmiş."],
+     "evidence": [], "input_snapshot": null, "generation": 0, "review_reasons": []}
+  ],
+  "decisions": [],
+  "history": []
+}
