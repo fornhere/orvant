@@ -2,81 +2,124 @@
 
 # Orvant
 
-**Ajan "bitti" der; Orvant kanıt ister.**
+**Kodlama ajanınız "bitti" der; Orvant kanıt ister.**
 
-*Your coding agent says "done". Orvant asks for proof.*
+Hedefi onaylı bir sözleşmeye dönüştüren, kabul denetimini işten önce yazan ve ajan çıktısını yalnızca bağımsız bir kapıdan geçerse kabul eden bir skill ve Python CLI'ı.
 
-[![Lisans: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Package](https://github.com/fornhere/orvant/actions/workflows/package.yml/badge.svg)](https://github.com/fornhere/orvant/actions/workflows/package.yml)
+[![Skill tests](https://github.com/fornhere/orvant/actions/workflows/skill-tests.yml/badge.svg)](https://github.com/fornhere/orvant/actions/workflows/skill-tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Sürüm 0.1.0b1](https://img.shields.io/badge/version-0.1.0b1%20beta-orange)
+![Version 0.1.0b1](https://img.shields.io/badge/version-0.1.0b1%20beta-orange)
 
-Orvant; hedefi, alan nesnelerini, kaynakları, kararları ve işleri birlikte tutar. Yazılım projelerinde Python motoru Codex işlerini yürütür ve sonucu bağımsız bir kabul kapısından geçirir.
+## Önce kanıt
 
-> **Açık beta — 0.1.0b1.** İlk kapsam küçük Python CLI'ları, veri otomasyonu ve dar depo bakım işleridir. Genel proje otonomluğu veya kullanıcı emeğini azaltma iddiası henüz doğrulanmış değildir.
+Bu kesit, demo spec'iyle çalışan [`context`](docs/sample-output/context.txt) komutunun gerçek çıktısıdır:
 
-## Neden farklı
+```text
+- T-KONTROL [blocked] İnceleme gerekçesini kontrol et (kayıt: todo)
+  - Ölçüt: Gerekçenin kayıtlı metinle uyumu gerçekten incelenmiş.
+  - İlgili nesneler: inceleme-a
+  - Girdiler: inceleme-a
+  - Ürettiği nesneler: yok
+  - Etkin önkoşullar: T-INCELE
+  - Üretici bağı: inceleme-a ← T-INCELE
+  - Kabul güncelliği: henüz doğrulanmadı · tamamlanma sayısı: 0
+  - Kontrol: dependency T-INCELE: todo
 
-- **"Bitti" bir iddiadır, karar değil.** İşçinin `complete` demesi kabul değildir. Sonuç bağımsız kapıdan geçmelidir: ilan edilmiş kabul komutları, `codex sandbox` içinde çalışan kehanet ve yazma kapsamı denetimi.
-- **Sınav işten önce gelir.** Mimar, yürütmeden önce sözleşmenin gereksinimlerine bağlı bağımsız kehanet kontrollerini hazırlar. Uygulanabilir kasıtlı kusurlu çıktılar reddedilmeden kehanet kabul edilmez.
-- **Onayladığın şey bir sözleşmedir.** Karşılama hedefini karar haritasına ve gerçek sorulara çevirir. Plan ancak gösterilen sözleşme revizyonunu onayladıktan sonra başlar.
-- **Başarısızlık teşhis edilir, körlemesine tekrarlanmaz.** Neden sınıflanır ve sonraki adım önerilir: yeniden dene, yeniden planla, girdi/izin bekle ya da sana taşı.
-- **Her görev kendi şeridinde.** Her görev ayrı bir git worktree'sinde yürür; gerçek karar soruları tahmin edilmez, senin için kuyrukta toplanır.
+## Çalışılabilir görevler
+
+T-INCELE
+```
+
+Üretim komutları ve değiştirilmemiş çıktıların tümü [`docs/sample-output/`](docs/sample-output/KOMUTLAR.md) altında.
+
+## Ajanı doğrudan çalıştırmak neden yetmez?
+
+| | Yalnız ajan | Orvant ile |
+| --- | --- | --- |
+| “Bitti” neye dayanır? | Ajanın beyanına | Tanımlı komutlara, kehanete ve kapsam kapısına |
+| Denetimi kim yazar? | Çoğu kez işçi | Önce bağımsız kehanet hazırlanır |
+| Hata olunca | Yeni bir deneme | Teşhis: yeniden dene, planla, bekle veya sana sor |
+| Belirsiz karar | Ajan tahmin edebilir | Kararlar kullanıcı için kuyruğa alınır |
+| Görev yalıtımı | Kuruluma bağlı | Her görev için ayrı git worktree |
 
 ## Nasıl çalışır
 
 ```mermaid
 flowchart LR
-    K["karsila<br/>hedef → sorular → onaylı sözleşme"] --> M["mimar<br/>görev grafiği · yetkiler"]
-    M --> O["kehanet<br/>işten önce hazırlanır,<br/>kusurlu çıktıyı reddetmeli"]
-    O --> Y["yurut<br/>Codex goal modu,<br/>görev başına git worktree"]
-    Y --> G{"bağımsız kapı<br/>komutlar · sandbox'ta kehanet · kapsam"}
-    G -- geçer --> A["kabul"]
-    G -- kalır --> T["teşhis<br/>yeniden dene · yeniden planla · bekle · sana taşı"]
-    T -. yeniden dene .-> Y
-    T -. yeniden planla .-> M
+  G["Hedef"] --> I["Karşılama<br/>sorular → onaylı sözleşme<br/>(orvant karsila)"]
+  I --> P["Plan<br/>görev grafiği · izinler<br/>(orvant mimar)"]
+  P --> O["Önce kehanet<br/>kusurlu çıktıları reddetmeli"]
+  O --> W["İşçi<br/>görev başına bir git worktree<br/>(orvant yurut)"]
+  W --> GA{"Bağımsız kapı<br/>komutlar · sandbox'ta kehanet · kapsam"}
+  GA -- geçer --> A["Kabul + makbuz"]
+  GA -- kalır --> D["Teşhis<br/>yeniden dene · planla · bekle · sana sor"]
+  D -.-> W
+  D -.-> P
 ```
 
-`orvant surdur` mevcut planı tur, süre ve gözlenen kota sınırları içinde sürdürür; ilk karşılamayı veya planı oluşturmaz.
+## 60 saniyede dene
 
-**[Hızlı başlangıç →](#kurulum)** · [Motor](docs/MOTOR.md) · [Kullanım](docs/KULLANIM.md) · [SSS](docs/SSS.md) · [Beta kapsamı](docs/BETA.md) · [Teknik tasarım](TEKNIK-TASARIM.md)
-
-## Skill ve motor
-
-**Skill**, dosyaları okuyup komut çalıştırabilen ajana projeyi nasıl kurup sürdüreceğini anlatır. Yerel `.project` kaydı; hedefi, somut nesneleri, ilişkileri, kararları, görevleri ve kabul dayanaklarını saklar. Ontoloji mantığı korunur: tür ile nesne ayrı tutulur, ilişkinin kuralları açıkça tanımlanır, girdideki değişimin bağlı incelemelere etkisi izlenir.
-
-**Motor**, hedefi onaylı sözleşmeye, sözleşmeyi görev grafiğine çevirir; yetkili işleri yürütür, başarısızlığı teşhis eder ve mevcut oturumdan devam eder. İşçinin “bitti” demesi yeterli değildir; sonuç bağımsız kapının kabulünü almalıdır.
-
-`.project` kaydı ile motor oturumu ayrıdır. Kayıttaki kabul edilmiş karar, motor sözleşmesinin revizyon onayı yerine geçmez.
-
-## Kurulum
-
-Motor için Linux, Python **3.11+** ve Git gerekir. Bu deponun kökünden:
+Kodlama ajanı CLI’ı ve API anahtarı gerekmez. `init`, hedefte bir `AGENTS.md` dosyası oluşturur.
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install .
-orvant --help
-orvant karsila --help
-orvant surdur --help
+git clone https://github.com/fornhere/orvant && cd orvant
+python3 skills/orvant/scripts/project.py init /tmp/orvant-demo --spec examples/demo-spec.json
+python3 /tmp/orvant-demo/.project/scripts/project.py context /tmp/orvant-demo
+python3 /tmp/orvant-demo/.project/scripts/project.py ontology /tmp/orvant-demo
 ```
 
-Gerçek model çağrısı ve yürütme için kimliği doğrulanmış **Codex CLI**, goal desteği ve `codex sandbox` gerekir. Motor `codex-cli 0.155.1` temel alınarak geliştirilmiştir; başka sürümler ve motorun macOS/Windows davranışı doğrulanmış sayılmaz. Runtime ek Python bağımlılığı istemez.
+Çıktıda çalışmaya hazır `T-INCELE` görevini, önkoşul bekleyen `T-KONTROL` görevini ve nesne haritasını göreceksiniz.
 
-Wheel motoru kurar. Skill için ajana [skills/orvant/SKILL.md](skills/orvant/SKILL.md) dosyasını açıkça okut. Skill'i tek başına kopyalamak motoru kurmaz. Ayrı kayıt runtime'ı Linux, macOS ve Windows üzerinde Python **3.10+** kullanır.
+## Kendi deponuzda çalıştırın
 
-## Başlama ve devam etme
+Motor Linux, Git, Python 3.11+ ve kurulu, oturum açılmış **Codex CLI veya Claude Code (biri yeterli)** gerektirir. İkisi eşit desteklenir; hiçbiri varsayılan veya deneysel değildir. Motor `codex-cli 0.155.1` ile geliştirilmiştir; diğer sürümler doğrulanmadı ve Claude Code için doğrulanmış sürüm iddiası yoktur. macOS veya Windows motor davranışı doğrulanmadı.
 
-Ajanına hedefini ve çalışılacak depoyu anlat; [motor akışını](skills/orvant/references/engine.md) izlemesini iste. Motor oturumu hem ürün deposunun hem bu kaynak ağacının dışında olsun.
+İşçi seçimi: `ORVANT_YURUTUCU=codex|claude`, `orvant.toml` içindeki `[yurutucu] tur = "codex"` veya `tur = "claude"` ayarından önceliklidir. İkisi de belirtilmezse PATH'te veya ayarlı yolunda kurulu tek ikili otomatik algılanır. İkisi de kuruluysa açık seçim zorunludur; aksi halde Orvant `iki yürütücü bulundu` hatası verir.
 
-Akış: hedef → gerçek sorular ve cevaplar → gösterilen sözleşme revizyonunun onayı → ilk plan → yetkili yürütme. Plan zaten varsa aynı oturumda `orvant surdur` kullanılır; bu komut ilk karşılama veya planı oluşturmaz. Çıkış kodu yerine bitiş nedenini, açık soruları ve kabul makbuzlarını birlikte değerlendir.
+Linux'ta kehanetin OS yalıtımı, seçilen işçiden bağımsız olarak bubblewrap (`bwrap`) veya Codex sandbox (`codex sandbox`) gerektirir. `orvant.toml` içindeki `[kehanet] yalitim = "auto"` önce doğrulanmış `bwrap`, sonra Codex sandbox dener; `yalitim = "bwrap"` veya `yalitim = "codex"` ilgili arka ucu zorlar. Kullanılabilir yalıtım arka ucu yoksa Orvant kehaneti çalıştırmaz: kapı kapanır, yalıtımsız koşmaz.
 
-Kayıt/ontoloji tarafında ajan modeli projenin gerçek kavramlarıyla kurar. Yeni oturumda `context` ve `ontology` ile güncel durumu okur; değişikliği önce önizler, sonra uygular. [Kullanım rehberi](docs/KULLANIM.md).
+```sh
+python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install .
+orvant karsila baslat "<oturum>" --hedef "<hedef>"           # model çağrısı yok
+orvant karsila ilerle "<oturum>"                             # model çağırabilir
+orvant karsila sorular "<oturum>"                            # model çağrısı yok
+orvant karsila cevapla "<oturum>" "<soru-id>" "<cevap>"      # kullanıcı kararı
+orvant karsila onayla "<oturum>" "<revizyon>"                # kullanıcı kararı
+orvant mimar plan "<oturum>" --depo "<depo>"                # model çağırır
+orvant surdur "<oturum>" --kuru                              # işi yürütmez
+orvant surdur "<oturum>"                                    # model çağırabilir
+```
 
-## Beta sınırları
+Oturumu hedef deponun ve bu kaynak ağacının dışında tutun. Sorulara gerçekten kullanıcı cevap vermeli ve yalnızca ekranda gösterilen sözleşme revizyonu onaylanmalıdır. `surdur` ilk karşılamayı ya da planı oluşturmaz. Bitiş nedenini, açık soruları, izinleri ve kabul makbuzlarını inceleyin; yalnızca sıfır çıkış kodu tamamlanma anlamına gelmez. `orvant proje` komutu deneyseldir.
 
-Bu sürüm karşılama, mimari planlama, yürütme, teşhis ve operatör devam akışını içerir. Kehanet, kabul koşullarını görevden bağımsız denetler; ölçütlerin yeterliliği ve modelin yorumları yine incelenmelidir. Yerel kabul komutları çalıştırılır; gerçek yürütmeden önce planı ve izinleri gözden geçir.
+## Ajanınızla kullanın
 
-Kayıt betikleri kendi içinde ağ aktarımı yapmaz. Ajan proje dosyalarını okuduğunda kullanılan AI hizmetinin veri işleme koşulları geçerlidir.
+Dosya okuyup komut çalıştırabilen ajanınıza [`skills/orvant/SKILL.md`](skills/orvant/SKILL.md) dosyasını verin. Örneğin: “Bu depoda hedefimi uygula; Orvant skill'ini izle, kararları tahmin etme ve değişiklikleri uygulamadan önce önizle.” Wheel yalnız motoru kurar; skill ayrıca verilmelidir. Proje kayıt runtime’ı ayrıca Linux, macOS ve Windows üzerinde Python 3.10+ destekler.
 
-[Motor](docs/MOTOR.md) · [Kullanım](docs/KULLANIM.md) · [Sık sorulanlar](docs/SSS.md) · [Teknik tasarım](TEKNIK-TASARIM.md) · [MIT lisansı](LICENSE)
+## Beta kapsamı ve sınırlar
+
+> **Açık beta — 0.1.0b1.** Küçük Python CLI'ları, veri otomasyonu veya dar kapsamlı depo bakım işleriyle başlayın. Geniş kapsamlı otonom proje tamamlama ve kullanıcı emeğinin azaldığı henüz doğrulanmış değildir.
+
+Beta; karşılama, planlama, yürütme, teşhis ve operatörün mevcut oturumu sürdürmesi akışlarını kapsar. Bağımsız kehanet kontrolleri kabul gereklerine bağlar ve uygulanabilir kusurlu çıktılarla sınar; sözleşmenin ve kehanetin kalitesine bağlıdır, genel anlamsal doğruluğu kanıtlamaz. Kullanıcı cevapları, sözleşme onayı ve izin kararları gerçek kullanıcıya aittir.
+
+Kabul komutları yerelde çalışır; gerçek yürütmeden önce planı ve verilen izinleri inceleyin. Proje kayıt betikleri kendileri ağ isteği göndermez. Dosyaları okuyan bir AI ajanı ise hizmet sağlayıcısının veri işleme koşullarına tabidir.
+
+## Belgeler
+
+| Belge | Dil |
+| --- | --- |
+| [Motor rehberi](docs/MOTOR.md) | Türkçe |
+| [Kullanım ve proje kaydı](docs/KULLANIM.md) | Türkçe |
+| [Sık sorulanlar](docs/SSS.md) | Türkçe |
+| [Beta kapsamı](docs/BETA.md) | Türkçe |
+| [Teknik tasarım](TEKNIK-TASARIM.md) | Türkçe |
+| [Motor akışı](skills/orvant/references/engine.md) | Türkçe |
+| [Proje modeli](skills/orvant/references/model.md) | Türkçe |
+| [Ontoloji](skills/orvant/references/ontology.md) | Türkçe |
+| [Plan değişiklikleri](skills/orvant/references/plan-changes.md) | Türkçe |
+
+## Lisans ve sorunlar
+
+[MIT lisansı](LICENSE) · [GitHub Issues](https://github.com/fornhere/orvant/issues). Sorun bildirirken özel proje içeriği veya kimlik bilgisi paylaşmayın.
