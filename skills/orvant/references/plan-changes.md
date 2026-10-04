@@ -29,6 +29,32 @@ incele. Digest state, eylem ve önceki/sonraki modelin bütün evidence/file
 referanslarını gözler; dosyalar değişirse revizyon aynı kalsa bile yeniden preview
 gerekir. Dış editörler kilitlenmez; bu dosya sistemi snapshot'ı değildir. State commit olup görünüm yazımı başarısızsa aynı eylemi tekrar uygulama.
 
+## Görevi iptal etme veya yerine görev koyma
+
+`cancel_task`, yalnız etkin durumu `todo`, `blocked`, `needs_review` ya da `review`
+olan bir görevi iptal eder. Boş olmayan genel `reason` zorunludur. Tamamlanmış bir
+görev ancak geçmiş kabulün neden geri çekildiğini açıklayan gerekçe ve açık
+`"allow_done": true` ile iptal edilebilir; diğer durumlarda bu bayrak `false` olur.
+
+```json
+{"action":"cancel_task","actor":"agent","reason":"Kapsamdan kullanıcı isteğiyle çıkarıldı.","task_id":"T-ESKI","allow_done":false}
+```
+
+`supersede_task` aynı iptal kurallarını uygular, eski görevi `cancelled` yapar ve
+var olan yeni görevin kimliğini kalıcı `superseded_by` bağı olarak kaydeder.
+`replacement_task_id` önceden oluşturulmuş olmalı; yeni görevi aynı olay içinde
+uydurmaz veya eklemez. Her iki eylemi de yukarıdaki `preview` → `apply` akışıyla,
+aynı `--expected-revision` ve preview'dan dönen `--preview-digest` ile uygula.
+
+```json
+{"action":"supersede_task","actor":"agent","reason":"Yeni görev daraltılmış kapsamı devralıyor.","task_id":"T-ESKI","replacement_task_id":"T-YENI","allow_done":false}
+```
+
+Her uygulama kendi history olayını ve önce/sonra görev değişimini kaydeder.
+İptal edilen görevler `context`, `derive` ve `lanes` canlı çalışma görünümlerinde
+yer almaz. Onlara bağımlı görevler ise sessizce çalışabilir sayılmaz: etkin
+durumları `blocked` olur ve sorunlarında `dependency <id>: cancelled` görünür.
+
 ## Alan grafiğinde atomik değişiklik
 
 Şema 3'te `mutate_graph` eylemi `operations` listesi alır:
@@ -121,18 +147,20 @@ sessizce kaldırılamaz; aynı tanım veya cancelled görev revizyonu reddedilir
 Şema geçişinden önce yüklü skill'in kaynak betiğini kullan:
 
 ```sh
-python3 "<skill-dir>/scripts/project.py" upgrade "<root>"
+python3 "<skill-dir>/scripts/project.py" upgrade preview "<root>"
+python3 "<skill-dir>/scripts/project.py" upgrade apply "<root>" --preview-digest "<preview_digest>"
 ```
 
-Yükseltme state'i değiştirmez. Projede `core.py`, `project.py`, `ontology.py`, `acceptance.py`
-dörtlüsünü kurar; yalnız iki betiği olan eski kurulum desteklenir. Kaynakla aynıysa
-`noop`; değiştiyse `updated` ve kalıcı yedek dizini döner.
+Önizleme hiçbir dosyayı değiştirmeden runtime dosyalarının eski/yeni SHA-256 değerlerini,
+tanınan history eylem göçlerini ve uyumsuz eylemleri gösterir. `apply` yalnız aynı
+`preview_digest` ile tek yazıcı kilidi altında runtime ve gerekiyorsa state göçünü uygular;
+kaynakla aynıysa `noop`, değiştiyse `updated` ve kalıcı yedek dizini döner.
 
 Yedek `.project/runtime-backups/upgrade-*/` içindedir. `manifest.json` her modülün
 önceden bulunup bulunmadığını kaydeder. Hata sonucunda `restored` eski dosyaların
 korunduğunu/geri alındığını, `restore_failed` eksik geri alma olduğunu belirtir.
-Dört dosya topluca atomik değildir; süreç kesilirse yazıcıları durdur, manifest'e
-göre eski dosyaları geri koy ve önceden bulunmayan ontology.py/acceptance.py dosyalarını kaldır. Uyumlu
+Her hedef atomik değiştirilir; çok dosyalı işlem hatasında runtime ve state yedekten geri alınır.
+Süreç kesilirse yazıcıları durdurup manifest ve yedek state/runtime dosyalarını birlikte geri koy. Uyumlu
 runtime olmadan yeni şema state'ini eski betikle açmaya çalışma.
 
 CLI işlemleri işletim sistemi advisory lock ile sıraya girer; bu kilit doğrudan/elle dosya

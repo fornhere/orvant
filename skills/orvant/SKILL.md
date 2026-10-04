@@ -190,7 +190,7 @@ bütün bileşen seri çalışır. Seri şerit çalışırken diğer bütün şe
 **Tek yazıcı:** kayıt durumunu yalnız koordinatör `preview → apply
 --expected-revision` ile yazar. Şerit işçileri yalnız kendi kapsamlarında
 çalışır ve önerilerini/kanıtlarını geri döndürür; aynı kayda paralel yazmaz.
-Eski kurulumda bu komutlar yoksa kaynak skill betiğiyle `upgrade` çalıştır.
+Eski kurulumda bu komutlar yoksa kaynak skill betiğiyle önce `upgrade preview`, ardından digest ile `upgrade apply` çalıştır.
 
 ### Proje kanıt dizini (şema 3)
 

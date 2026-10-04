@@ -142,7 +142,8 @@ nesne durumu hesaplanır: `input`, `pending`, `current`, `needs_review`.
 
 ```sh
 python3 "<skill-dir>/scripts/project.py" init "<root>" --spec "<spec.json>"
-python3 "<skill-dir>/scripts/project.py" upgrade "<root>"
+python3 "<skill-dir>/scripts/project.py" upgrade preview "<root>"
+python3 "<skill-dir>/scripts/project.py" upgrade apply "<root>" --preview-digest "<preview_digest>"
 python3 "<root>/.project/scripts/project.py" check "<root>"
 python3 "<root>/.project/scripts/project.py" context "<root>" --json
 python3 "<root>/.project/scripts/project.py" ontology "<root>" --json
