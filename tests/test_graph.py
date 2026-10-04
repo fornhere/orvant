@@ -42,6 +42,25 @@ class GraphTest(unittest.TestCase):
         self.assertEqual(preview['next_revision'], applied['revision'])
         return applied
 
+    def test_graph_root_may_be_reached_through_directory_symlink(self):
+        import graph
+        real = self.root / 'real'
+        real.mkdir()
+        (real / 'module.py').write_text('def h(): pass\n', encoding='utf-8')
+        linked = self.root / 'linked'
+        linked.symlink_to(real, target_is_directory=True)
+
+        event, report = graph.generate(linked, self.state)
+
+        self.assertEqual(report['modules'], 1)
+        self.assertEqual([op['object']['properties']['name'] for op in event['operations']
+                          if op['op'] == 'add_object' and op['object']['type'] == 'code_symbol'], ['h'])
+
+    def test_windows_separators_normalize_to_internal_posix_paths(self):
+        import graph
+        self.assertEqual(graph._js_target(r'src\component', {'src/component.ts'}),
+                         'src/component.ts')
+
     def setup_w108(self):
         self.state['ontology']['object_types'] = [{'id': 'Domain', 'label': 'Domain',
             'properties': {'source': {'type': 'json', 'required': True, 'enum': None}}}]

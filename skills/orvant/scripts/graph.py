@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -38,6 +39,24 @@ def _match(path, pattern):
 
 def _selected(path, include, exclude):
     return (not include or any(_match(path, p) for p in include)) and not any(_match(path, p) for p in exclude)
+
+
+def _posix_norm(path):
+    """Dosya sistemi ayırıcısından bağımsız iç graf yolu üret."""
+    return posixpath.normpath(str(path).replace('\\', '/'))
+
+
+def _symlink_below(root, path):
+    """Kökün üstündeki platform symlink/junction'larını güvenlik kapsamına alma."""
+    current = path
+    while current != root:
+        if current.is_symlink():
+            return True
+        parent = current.parent
+        if parent == current:
+            return True
+        current = parent
+    return False
 
 
 def _ignore_glob(pattern, value):
@@ -120,7 +139,7 @@ def _files(root, include, exclude, max_files, metadata=False):
         relative = file.relative_to(root).as_posix()
         if (file.suffix not in EXTENSIONS and not (metadata and file.name in {'package.json', 'tsconfig.json'})) or any(p in IGNORED for p in file.relative_to(root).parts):
             continue
-        if any(p.is_symlink() for p in (file, *file.parents)) or not file.is_file():
+        if _symlink_below(root, file) or not file.is_file():
             continue
         if _selected(relative, include, exclude):
             result.append(relative)
@@ -410,7 +429,7 @@ JS_EXTENSIONS = ('.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs')
 
 
 def _js_target(stem, available):
-    stem = os.path.normpath(stem).replace(os.sep, '/')
+    stem = _posix_norm(stem)
     if stem in available:
         return stem
     suffix = PurePosixPath(stem).suffix
@@ -499,7 +518,7 @@ class _JSResolver:
 
     def read(self, path):
         file = self.root / path
-        if not file.resolve().is_relative_to(self.root) or any(p.is_symlink() for p in (file, *file.parents)):
+        if not file.resolve().is_relative_to(self.root) or _symlink_below(self.root, file):
             self.warnings.append({'file': path, 'reason': 'configuration outside regular repository files'})
             return {}
         try:
@@ -520,7 +539,7 @@ class _JSResolver:
         parent = data.get('extends')
         if isinstance(parent, str):
             if parent.startswith('.'):
-                target = os.path.normpath(str(PurePosixPath(path).parent / parent)).replace(os.sep, '/')
+                target = _posix_norm(PurePosixPath(path).parent / parent)
                 if not target.endswith('.json'):
                     target += '.json'
                 options.update(self.config(target, active))
@@ -530,7 +549,7 @@ class _JSResolver:
         if isinstance(compiler, dict):
             for key, name in (('outDir', 'out_dir'), ('rootDir', 'root_dir')):
                 if isinstance(compiler.get(key), str):
-                    options[name] = os.path.normpath(str(PurePosixPath(path).parent / compiler[key])).replace(os.sep, '/')
+                    options[name] = _posix_norm(PurePosixPath(path).parent / compiler[key])
             base = compiler.get('baseUrl')
             if isinstance(base, str):
                 options['base_url'] = str(PurePosixPath(path).parent / base)
@@ -568,7 +587,7 @@ class _JSResolver:
 
     def source_entry(self, base, target):
         """Depoda olmayan derleme girişini yalnız mevcut TS kaynağına eşle."""
-        entry = PurePosixPath(os.path.normpath(str(PurePosixPath(base) / target)).replace(os.sep, '/'))
+        entry = PurePosixPath(_posix_norm(PurePosixPath(base) / target))
         if (self.root / entry).exists():
             return None
         options = self.options(base)
@@ -773,8 +792,8 @@ def _review_candidates(old_objects, objects, old_relations, relations, operation
 
 
 def generate(root, state=None, *, include=(), exclude=(), max_files=10000):
-    root = Path(root).absolute()
-    if not root.is_dir() or root.is_symlink():
+    root = Path(root).resolve()
+    if not root.is_dir():
         raise ValueError('graph root must be a regular directory')
     state = state or {'schema_version': 3, 'ontology': {'object_types': [], 'relation_types': []}, 'objects': [], 'relations': [], 'history': []}
     if state['schema_version'] != 3:
