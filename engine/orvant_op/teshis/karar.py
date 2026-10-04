@@ -10,7 +10,7 @@ from orvant_op.mimar.kusurlu import negatif_kontrol
 SINIFLAR = (
     "butce_modeli", "plan_sozlesmesi", "sozlesme_anlami", "yasam_dongusu", "baglam_eksik",
     "ortam_gozlem", "arac_eksik", "kabul_celiskisi", "girdi_bekleme", "kod_hatasi", "gecici_altyapi",
-    "dogrulayici_kusuru", "orvant_kusuru", "gecici_artik", "bilinmeyen",
+    "dogrulayici_kusuru", "orvant_kusuru", "gecici_artik", "isci_goal_kapanmadi", "bilinmeyen",
 )
 EYLEMLER = (
     "yeniden_denetle", "yeniden_dene", "yeniden_planla", "girdi_bekle",
@@ -185,6 +185,10 @@ def teshis_et(baglam):
         sinif, eylem, hipotez = "baglam_eksik", "yeniden_dene", "Göreve gerekli olgu aktarılmamış"
     elif kotu_komut:
         sinif, eylem, hipotez = "kod_hatasi", "yeniden_dene", "Kabul komutu gerçek hata verdi"
+    elif (durum in ("active", "paused", "usage_limited", "okuma_hatasi") and degisen
+          and not kotu_komut and kehanet.get("gecti") is True and not ihlaller):
+        sinif, eylem = "isci_goal_kapanmadi", "yeniden_dene"
+        hipotez = "İşçi değişiklik yaptı ve bağımsız kapı geçti; yalnız goal kapanışı eksik"
     elif durum in ("active", "paused", "hedef_yok", "usage_limited", "okuma_hatasi", "blocked"):
         sinif, eylem, hipotez = "yasam_dongusu", "yukselt", "Goal yaşam döngüsü belirsiz veya tamamlanmadı"
     elif durum == "complete" and negatif.get("durum") == "anlamli":
@@ -270,6 +274,8 @@ def teshis_et(baglam):
             kisa_istisna = kisa_istisna[:77] + "..."
         sonuc["kullanici_sorusu"] = (f"Orvant iç hatası ({kisa_istisna}); "
             "işçi koşmadı, deneme hakkı iade edildi. Orvant düzeltilip sürümü değişince görev kendiliğinden yeniden denenir.")
+    if sinif == "isci_goal_kapanmadi":
+        sonuc["oneri"] = "yeniden_dene_net_talimat"
     if sinif == "arac_eksik":
         sonuc["oneri"] = ({"islem": "yetki_istegi_ekle", "yetki_eylemi": "kurulum",
             "arac_adaylari": adaylar, "ayrinti": ", ".join(str(a["yol"] or a["id"]) for a in adaylar)
