@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "result": "initialized",
+  "revision": 0,
+  "root": "<demo>",
+  "state_committed": true,
+  "continue_command": "python3 <demo>/.project/scripts/project.py context <demo>",
+  "continue_shell": "posix",
+  "agents_created": true,
+  "existing_agents_preserved": false,
+  "integration": "created",
+  "overrides": [],
+  "note": "Root guidance created; automatic discovery in other working directories is not guaranteed."
+}

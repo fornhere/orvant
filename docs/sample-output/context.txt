@@ -1,0 +1,74 @@
+# Sentetik çıktı incelemesi — proje bağlamı
+
+Revision: 0 · Yetkili kaynak: .project/state.json
+
+Bu görünüm türetilmiştir. Güncel kanıt kontrolü için context komutunu çalıştır.
+
+Amaç: Bir örnek metnin incelemesini ve dayanağını izlemek
+Hedef kitle: Örneği deneyen kullanıcı
+
+## Kapsam
+
+- Yerel metin ve inceleme
+
+## Kapsam dışı
+
+- Gerçek model performansı iddiası
+
+## Kısıtlar
+
+- Örnek veri kurmacadır
+
+## Açık sorular
+
+- Yok.
+
+## Nesneler ve ilişkiler
+
+- metin-a (input): Kurmaca metin A
+- inceleme-a (assessment): Metin A incelemesi
+- inceleme-a → İnceler → metin-a
+
+### Somut nesne değerleri
+
+- metin-a: {"text": "Bugün aynı komutu iki kez denedim."}
+- inceleme-a: {"verdict": "pending"}
+
+Türler ve bağlantı kuralları: `ontology` komutu / `ONTOLOJİ.md`.
+
+## Kararlar
+
+
+## Görevler
+
+- T-INCELE [todo] Örnek metnin tek cümle oluşunu incele (kayıt: todo)
+  - Ölçüt: Metin ve tek cümle ölçütü incelenmiş; sonuç gerekçesiyle kaydedilmiş.
+  - İlgili nesneler: metin-a, inceleme-a
+  - Girdiler: metin-a
+  - Ürettiği nesneler: inceleme-a
+  - Etkin önkoşullar: yok
+  - Kabul güncelliği: henüz doğrulanmadı · tamamlanma sayısı: 0
+- T-KONTROL [blocked] İnceleme gerekçesini kontrol et (kayıt: todo)
+  - Ölçüt: Gerekçenin kayıtlı metinle uyumu gerçekten incelenmiş.
+  - İlgili nesneler: inceleme-a
+  - Girdiler: inceleme-a
+  - Ürettiği nesneler: yok
+  - Etkin önkoşullar: T-INCELE
+  - Üretici bağı: inceleme-a ← T-INCELE
+  - Kabul güncelliği: henüz doğrulanmadı · tamamlanma sayısı: 0
+  - Kontrol: dependency T-INCELE: todo
+
+## Çalışılabilir görevler
+
+T-INCELE
+
+## Uyarılar
+
+- Yok.
+
+## Onarım işlemleri
+
+Bunlar öneridir; gerekçeyi değerlendir, actor ekle ve güncel revision ile uygula.
+- Yok.
+
+Kanıt hash'i dosya sürümünü denetler; kalite veya insan kabulünü ispatlamaz.

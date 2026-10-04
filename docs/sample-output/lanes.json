@@ -1,0 +1,40 @@
+{
+  "revision": 0,
+  "lanes": [
+    {
+      "id": "lane-a49e5eeb4e86",
+      "mode": "serial",
+      "tasks": [
+        "T-INCELE"
+      ],
+      "queued_tasks": [
+        "T-KONTROL"
+      ],
+      "write_scope": [],
+      "reasons": [
+        {
+          "tasks": [
+            "T-INCELE",
+            "T-KONTROL"
+          ],
+          "reasons": [
+            "prerequisite_chain"
+          ]
+        },
+        {
+          "tasks": [
+            "T-INCELE",
+            "T-KONTROL"
+          ],
+          "reasons": [
+            "write_scope_unknown; exclusive serial execution"
+          ]
+        }
+      ],
+      "separation_reason": "Diğer bileşenlerle bilinen yazma/önkoşul/açık karar kesişimi yok."
+    }
+  ],
+  "queued_lanes": [],
+  "state_committed": false,
+  "single_writer": "Tek yazıcı: kayıt durumunu yalnız koordinatör preview → apply --expected-revision ile yazar; şeritler kendi önerilerini ve kanıtlarını döndürür. Şerit içi işler önkoşul sırasıyla yürür; serial şeritler bütün diğer şeritler durduğunda çalışır."
+}

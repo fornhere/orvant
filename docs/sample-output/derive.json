@@ -1,0 +1,12 @@
+{
+  "revision": 0,
+  "proposals": [],
+  "skipped": [
+    {
+      "category": "impact",
+      "reason": "Kayıtta önceki değişime ait etki/anlık görüntü yok."
+    }
+  ],
+  "state_committed": false,
+  "single_writer": "Tek yazıcı: kayıt durumunu yalnız koordinatör preview → apply --expected-revision ile yazar; şeritler kendi önerilerini ve kanıtlarını döndürür. Şerit içi işler önkoşul sırasıyla yürür; serial şeritler bütün diğer şeritler durduğunda çalışır."
+}
