@@ -82,7 +82,7 @@ def _oku(yol):
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
-    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama"):
+    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon"):
         if bolum in veri and not isinstance(veri[bolum], dict):
             raise AyarHatasi(f"{yol}: [{bolum}] tablo olmalı")
     return veri
@@ -369,3 +369,29 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def koordinasyon_kaynaklari(baslangic=None):
+    """[koordinasyon].kaynaklar girdilerini doğrular ve yollarını ayar dosyasına göre çözer."""
+    deger, dosya = _dosyadan("koordinasyon", "kaynaklar", baslangic)
+    if deger is None:
+        return []
+    if not isinstance(deger, list):
+        raise AyarHatasi("[koordinasyon].kaynaklar tablo listesi olmalı")
+    zorunlu = {"yol", "bicim", "id_alani", "dosyalar_alani", "durum_alani",
+               "aktif_durumlar", "yok_sayilan_durumlar"}
+    sonuc = []
+    for no, kaynak in enumerate(deger):
+        if not isinstance(kaynak, dict) or not zorunlu.issubset(kaynak):
+            raise AyarHatasi(f"[koordinasyon].kaynaklar[{no}] eksik/geçersiz")
+        if kaynak["bicim"] not in ("json", "jsonl"):
+            raise AyarHatasi("koordinasyon biçimi json veya jsonl olmalı")
+        for ad in ("id_alani", "dosyalar_alani", "durum_alani"):
+            _metin(kaynak[ad], f"koordinasyon.{ad}")
+        for ad in ("aktif_durumlar", "yok_sayilan_durumlar"):
+            if not isinstance(kaynak[ad], list) or not all(isinstance(x, str) for x in kaynak[ad]):
+                raise AyarHatasi(f"koordinasyon.{ad} metin listesi olmalı")
+        kayit = dict(kaynak)
+        kayit["yol"] = _yol_coz(kaynak["yol"], dosya, "koordinasyon.yol")
+        sonuc.append(kayit)
+    return sonuc

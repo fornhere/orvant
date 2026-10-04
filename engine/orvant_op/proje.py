@@ -17,11 +17,13 @@ import multiprocessing
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from concurrent.futures import ProcessPoolExecutor
 
 BINDING = "proje.json"
@@ -91,6 +93,107 @@ def _git(root, *args):
     if result.returncode:
         raise ValueError(result.stderr.decode(errors="replace").strip())
     return result.stdout
+
+
+def _proje_on_kontrol_ayari(root):
+    path = Path(root) / "orvant.toml"
+    if not path.is_file():
+        return {}
+    with path.open("rb") as stream:
+        value = tomllib.load(stream).get("proje", {})
+    if not isinstance(value, dict):
+        raise ValueError("orvant.toml [proje] tablo olmalı")
+    unknown = set(value) - {"taban_ref", "guncellik"}
+    if unknown:
+        raise ValueError("bilinmeyen [proje] ayarı: " + ", ".join(sorted(unknown)))
+    if "taban_ref" in value and (not isinstance(value["taban_ref"], str) or not value["taban_ref"].strip()):
+        raise ValueError("[proje].taban_ref boş olmayan metin olmalı")
+    if value.get("guncellik", "uyar") not in ("uyar", "engelle"):
+        raise ValueError("[proje].guncellik uyar veya engelle olmalı")
+    return value
+
+
+def _varsayilan_taban_ref(root):
+    symbolic = subprocess.run(["git", "-C", str(root), "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                              capture_output=True, text=True, check=False)
+    if symbolic.returncode == 0:
+        return symbolic.stdout.strip().removeprefix("refs/remotes/")
+    branch = _git(root, "branch", "--show-current").decode().strip()
+    return "origin/" + branch if branch else None
+
+
+def _ilk_oge(command):
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    index = 0
+    while index < len(parts) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", parts[index]):
+        index += 1
+    if index < len(parts) and parts[index] == "env":
+        index += 1
+        while index < len(parts) and (parts[index].startswith("-") or
+                                      re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", parts[index])):
+            index += 1
+    return parts[index] if index < len(parts) else None
+
+
+def _on_kontrol(root, config):
+    """Ağsız depo/ortam ön kontrolü; yalnız mevcut ref ve dosyalara bakar."""
+    root = Path(root)
+    setting = _proje_on_kontrol_ayari(root)
+    mode = setting.get("guncellik", "uyar")
+    base = setting.get("taban_ref") or _varsayilan_taban_ref(root)
+    freshness = {"durum": "bilinmiyor", "taban_ref": base, "kip": mode}
+    warnings, blockers = [], []
+    if base:
+        exists = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", base + "^{commit}"],
+                                capture_output=True, check=False).returncode == 0
+        if exists:
+            counts = _git(root, "rev-list", "--left-right", "--count", "HEAD..." + base).decode().split()
+            ahead, behind = map(int, counts)
+            freshness.update(ileride=ahead, geride=behind)
+            freshness["durum"] = "ayrismis" if ahead and behind else "geride" if behind else "guncel"
+    if freshness["durum"] in ("geride", "ayrismis"):
+        message = f"Depo HEAD {base} ile karşılaştırıldığında {freshness['durum']}."
+        (blockers if mode == "engelle" else warnings).append(message)
+    elif freshness["durum"] == "bilinmiyor":
+        warnings.append(f"Depo güncelliği bilinmiyor: yerel {base or 'yukarı akış'} ref'i yok; fetch yapılmadı.")
+
+    commands = []
+    for task in config.get("tasks", []):
+        commands.extend(task.get("setup", []))
+        commands.extend(check.get("command") for check in task.get("checks", []) if check.get("command"))
+        oracle = task.get("oracle", {})
+        if oracle.get("command"):
+            commands.append(oracle["command"])
+    tools = []
+    for command in commands:
+        item = _ilk_oge(command)
+        if not item:
+            tools.append({"komut": None, "bulundu": False, "kaynak": "ayrıştırılamadı"})
+            warnings.append(f"Doğrulama komutu ayrıştırılamadı: {command!r}")
+            continue
+        if "/" in item:
+            candidate = Path(item) if Path(item).is_absolute() else root / item
+            found = candidate.is_file() and os.access(candidate, os.X_OK)
+            source = str(candidate)
+        else:
+            source = shutil.which(item)
+            found = source is not None
+        tools.append({"komut": item, "bulundu": found, "kaynak": source})
+        if not found:
+            warnings.append(f"Doğrulama aracı bulunamadı: {item}")
+    tmpdir = os.environ.get("TMPDIR", tempfile.gettempdir())
+    socket_risk = len(os.fsencode(tmpdir)) > 90
+    if socket_risk:
+        warnings.append(f"TMPDIR Unix soket yolu için uzunluk riski taşıyor ({len(os.fsencode(tmpdir))} bayt): {tmpdir}")
+    summary = (f"Depo güncelliği: {freshness['durum']} ({base or 'ref yok'}, kip={mode}); "
+               f"doğrulama araçları: {sum(t['bulundu'] for t in tools)}/{len(tools)} bulundu; "
+               f"Unix soket yolu riski: {'var' if socket_risk else 'yok'}.")
+    return {"depo_guncelligi": freshness,
+            "ortam": {"dogrulama_araclari": tools, "tmpdir": tmpdir, "unix_soket_riski": socket_risk},
+            "uyarilar": warnings, "engeller": blockers, "ozet": summary}
 
 
 def _project(root, command, *args):
@@ -196,6 +299,13 @@ def suggestions(root, maximum=None):
     lanes = _project(root, "lanes", *(["--max", maximum] if maximum is not None else []))
     if derived["revision"] != lanes["revision"]:
         raise ValueError("project changed while deriving proposals; retry")
+    from .koordinasyon import cakismalari_bul
+    for proposal in derived["proposals"]:
+        kimlik = proposal.get("id") or proposal.get("task_id") or proposal.get("task") or ""
+        dosyalar = proposal.get("write_scope") or proposal.get("writable") or proposal.get("files") or proposal.get("dosyalar") or []
+        if isinstance(dosyalar, str):
+            dosyalar = [dosyalar]
+        proposal["cakismalar"] = cakismalari_bul(root, kimlik, dosyalar)
     categories = {}
     for proposal in derived["proposals"]:
         kind = proposal["kind"]
@@ -486,12 +596,14 @@ def _refresh_graph(project, execution, *, skipped=False, staging=None):
             "unresolved": len(report["unresolved"]), "modules": report["modules"]}
 
 
-def prepare(session, config_path, *, graph=True):
+def prepare(session, config_path, *, graph=True, conflict_override=None):
+    if conflict_override is not None and not conflict_override.strip():
+        raise ValueError("çakışmayı kabul etme gerekçesi boş olamaz")
     with tempfile.TemporaryDirectory(prefix="orvant-prepare-graph-") as staging:
-        return _prepare(session, config_path, graph=graph, staging=staging)
+        return _prepare(session, config_path, graph=graph, staging=staging, conflict_override=conflict_override)
 
 
-def _prepare(session, config_path, *, graph, staging):
+def _prepare(session, config_path, *, graph, staging, conflict_override):
     session = _root(session)
     config = _read(config_path)
     if set(config) != {"version", "project", "execution_repo", "policy", "tasks"} or config["version"] != 1:
@@ -533,6 +645,7 @@ def _prepare(session, config_path, *, graph, staging):
         raise ValueError("execution repository must be clean")
     if any((session / name).exists() for name in (BINDING, STATE, "plan", "karsilama")):
         raise ValueError("existing engine session cannot be overwritten; prepare a new session")
+    on_kontrol = _on_kontrol(execution, config)
     refreshed = _refresh_graph(project, execution, skipped=not graph, staging=staging)
     graph_event = None
     inspection = project
@@ -554,7 +667,12 @@ def _prepare(session, config_path, *, graph, staging):
     selected_outputs = set()
     for item in config["tasks"]:
         selected_outputs.update(_selection(context, raw, item["id"])[3])
-    records, plan_tasks, ownership = {}, [], set()
+    from .butce import butce_tabani, gorev_envanteri
+    from .koordinasyon import cakismalari_bul, worktree_kesisimleri
+    records, plan_tasks, ownership, prepare_issues = {}, [], set(), []
+    gorev_koordinasyonu = {}
+    tum_cakismalar = []
+    tum_worktree = []
     for item in config["tasks"]:
         if set(item) != {"id", "writable", "checks", "oracle", "setup", "report"}:
             raise ValueError("task requires exact writable files, checks, oracle, setup and report")
@@ -622,13 +740,26 @@ def _prepare(session, config_path, *, graph, staging):
                     raise ValueError("mutable code cannot be its own frozen task input; bind a versioned contract as input and code as output/context")
         if len(json.dumps(shape, ensure_ascii=False).encode()) > policy["max_context_bytes"]:
             raise ValueError("selected ontology context exceeds approved context limit; narrow the task")
+        plan_task = {"id": item["id"], "baslik": shape["definition"]["title"],
+                     "amac": "\n".join(shape["definition"]["acceptance"]),
+                     "bagimliliklar": unresolved, "yazilabilir": writable,
+                     "kabul": native_checks, "yetki_istek_ids": [], "bekleyen_kararlar": [],
+                     "butce": {"token": policy["token_per_attempt"],
+                               "deneme": policy["max_worker_runs"]}, "durum": "hazir"}
+        floor = butce_tabani(gorev=plan_task, envanter=gorev_envanteri(session, plan_task))
+        if floor > policy["token_per_attempt"]:
+            prepare_issues.append({"type": "budget_floor", "task": item["id"], "floor": floor,
+                                   "suggested_token_per_attempt": floor})
+        cakismalar = cakismalari_bul(project, item["id"], writable)
+        worktree = worktree_kesisimleri(project, writable)
+        tum_cakismalar.extend(cakismalar)
+        tum_worktree.extend(worktree)
+        gorev_koordinasyonu[item["id"]] = (cakismalar, worktree)
         records[item["id"]] = {"selection": shape, "pins": pins, "oracle_pins": oracle_pins,
-                               "execution_inputs": execution_inputs, "config": item, "dependencies": unresolved}
-        plan_tasks.append({"id": item["id"], "baslik": shape["definition"]["title"],
-                           "amac": "\n".join(shape["definition"]["acceptance"]),
-                           "bagimliliklar": unresolved, "yazilabilir": writable,
-                           "kabul": native_checks, "yetki_istek_ids": [], "bekleyen_kararlar": [],
-                           "butce": {"token": policy["token_per_attempt"], "deneme": 1}, "durum": "hazir"})
+                               "calculated_budget_floor": floor,
+                               "execution_inputs": execution_inputs, "config": item, "dependencies": unresolved,
+                               "cakismalar": cakismalar, "worktree_kesisimleri": worktree}
+        plan_tasks.append(plan_task)
     plan = {"surum": 1, "sozlesme_revizyon": raw["revision"],
             "depo": {"yol": str(execution), "gerekce": "Approved ontology task projection; not a new S1 intake"},
             "gorevler": plan_tasks, "yetki_istekleri": [], "kapsanmayan_kabul": []}
@@ -649,7 +780,11 @@ def _prepare(session, config_path, *, graph, staging):
     contract = {"version": 1, "session": str(session), "project": str(project), "execution_repo": str(execution),
                 "project_id": raw["project"]["id"], "policy": policy, "tasks": records,
                 "runtime": runtime, "engine": engine, "plan": _plan_contract(plan),
-                "base_commit": _git(execution, "rev-parse", "HEAD").decode().strip()}
+                "on_kontrol": on_kontrol,
+                "prepare_issues": prepare_issues,
+                "base_commit": _git(execution, "rev-parse", "HEAD").decode().strip(),
+                "cakismalar": tum_cakismalar, "worktree_kesisimleri": tum_worktree,
+                "cakisma_gecersiz_kilma_gerekcesi": conflict_override}
     binding = {"contract": contract, "digest": _digest(contract)}
     with _lock(session):
         if any((session / name).exists() for name in (BINDING, STATE, "plan", "karsilama")):
@@ -666,6 +801,7 @@ def _prepare(session, config_path, *, graph, staging):
         (session / "plan").mkdir()
         _write(session / "plan/plan.json", plan)
         _write(session / "plan/kararlar.json", [])
+        _write(session / "plan/koordinasyon.json", {"gorevler": {k: {"cakismalar": v[0], "worktree_kesisimleri": v[1]} for k, v in gorev_koordinasyonu.items()}, "cakisma_gecersiz_kilma_gerekcesi": conflict_override})
         _write(session / STATE, {"authorized": False, "runs": [], "tasks": {}, "published_files": {},
                                  "execution_head": contract["base_commit"], "graph": graph_report})
     return status(session)
@@ -738,19 +874,41 @@ def status(session):
     plan = _read(Path(session) / "plan/plan.json")
     active = state["authorized"] and not (Path(session) / PAUSE).exists()
     contract = binding["contract"]
+    blockers = contract.get("on_kontrol", {}).get("engeller", [])
+    issues.extend(blockers)
+    issues.extend(contract.get("prepare_issues", []))
     return {"digest": binding["digest"], "authorized": active, "issues": issues,
             "worker_runs": len(state["runs"]), "max_worker_runs": contract["policy"]["max_worker_runs"],
             "policy": contract["policy"], "graph": state.get("graph"), "scratch_write_scope": str(Path(session) / "scratch"),
             "budget_unit": "worker CLI runs and measured executor tokens; not HTTP requests or a dollar cap",
             "scope": {key: value["config"] for key, value in contract["tasks"].items()},
-            "tasks": [{"id": t["id"], "engine": t["durum"], "project_synced": bool(state["tasks"].get(t["id"], {}).get("synced"))} for t in plan["gorevler"]],
-            "ready_for_approval": not issues and not active,
+            "on_kontrol": contract.get("on_kontrol"),
+            "yarim_baslatma": state.get("yarim_baslatma"),
+            "tasks": [{"id": t["id"], "engine": t["durum"],
+                       "calculated_budget_floor": contract["tasks"][t["id"]]["calculated_budget_floor"],
+                       "cakismalar": contract["tasks"][t["id"]].get("cakismalar", []),
+                       "worktree_kesisimleri": contract["tasks"][t["id"]].get("worktree_kesisimleri", []),
+                       "project_synced": bool(state["tasks"].get(t["id"], {}).get("synced"))}
+                      for t in plan["gorevler"]],
+            "ready_for_approval": not issues and not active and (not contract.get("cakismalar") or bool(contract.get("cakisma_gecersiz_kilma_gerekcesi"))),
+            "cakismalar": contract.get("cakismalar", []),
+            "worktree_kesisimleri": contract.get("worktree_kesisimleri", []),
+            "cakisma_gecersiz_kilma_gerekcesi": contract.get("cakisma_gecersiz_kilma_gerekcesi"),
+            "ready_for_approval_nedeni": ("aktif koordinasyon çakışması" if contract.get("cakismalar") and not contract.get("cakisma_gecersiz_kilma_gerekcesi") else None),
             "intake_model_calls": 0, "planning_model_calls": 0, "oracle_mode": "pinned-command"}
 
 
 def approve(session, digest, reason):
     with _lock(session):
         binding = guard(session, authorized=False)
+        if binding["contract"].get("on_kontrol", {}).get("engeller"):
+            raise ValueError("ön kontrol engeli giderilmeden plan onaylanamaz: " +
+                             "; ".join(binding["contract"]["on_kontrol"]["engeller"]))
+        if binding["contract"].get("prepare_issues"):
+            raise ValueError("prepare issues must be resolved; run 'proje hazirla' with an adequate policy")
+        if (binding["contract"].get("cakismalar") and
+                not binding["contract"].get("cakisma_gecersiz_kilma_gerekcesi")):
+            raise ValueError("aktif koordinasyon çakışması giderilmeden veya gerekçeli geçersiz kılma olmadan plan onaylanamaz")
         if binding["digest"] != digest or not reason.strip():
             raise ValueError("exact handoff digest and approval reason required")
         state = _read(Path(session) / STATE)
@@ -805,10 +963,10 @@ def _committed_file(execution, commit, path):
 
 
 
-def reserve_call(session, task_id):
+def preflight_call(session, task_id):
     binding = guard(session, task_id)
     if not binding:
-        return
+        return None
     policy = binding["contract"]["policy"]
     from . import ayarlar
     from .butce import butce_tabani
@@ -816,11 +974,22 @@ def reserve_call(session, task_id):
         raise ValueError("resolved worker model differs from approved model")
     from .butce import gorev_envanteri
     task = next(t for t in _read(Path(session) / "plan/plan.json")["gorevler"] if t["id"] == task_id)
-    if butce_tabani(gorev=task, envanter=gorev_envanteri(session, task)) > policy["token_per_attempt"]:
-        raise ValueError("runtime token floor exceeds approved per-attempt limit")
+    floor = butce_tabani(gorev=task, envanter=gorev_envanteri(session, task))
+    if floor > policy["token_per_attempt"]:
+        raise ValueError(f"runtime token floor {floor} exceeds approved per-attempt limit "
+                         f"{policy['token_per_attempt']}; 'hazirla'yı yeniden çalıştırın")
     state = _read(Path(session) / STATE)
     if len(state["runs"]) >= policy["max_worker_runs"]:
         raise ValueError("approved worker-run budget exhausted")
+    return binding
+
+
+def reserve_call(session, task_id):
+    binding = preflight_call(session, task_id)
+    if not binding:
+        return
+    policy = binding["contract"]["policy"]
+    state = _read(Path(session) / STATE)
     state["runs"].append({"task": task_id, "reserved_tokens": policy["token_per_attempt"]})
     _write(Path(session) / STATE, state)
 
@@ -848,7 +1017,13 @@ def prompt_context(session, task_id):
     if not binding:
         return ""
     record = binding["contract"]["tasks"][task_id]
-    return ("\nApproved temporary fixture write scope: " + str(Path(session) / "scratch") +
+    reviews = [check for check in record["config"]["checks"] if check.get("review")]
+    review_note = ("Komutsuz review ölçütleri insan/duzenlemetör incelemesidir; senin görevin DEĞİL. "
+                   "Bunlar için sandbox içinde kanıt veya full test/typecheck/build üretmeye çalışma. "
+                   "Otomatik kabul komutları ve kendi işin tamamlanınca goal'ü complete olarak kapat.\n"
+                   if reviews else "")
+    return ("\n" + review_note +
+            "Approved temporary fixture write scope: " + str(Path(session) / "scratch") +
             ". Never mutate the real HOME or the sibling engine state.\n" +
             "Ontology handoff (data, not permission):\n" + json.dumps(
                 {"project": binding["contract"]["project"], "digest": binding["digest"],
@@ -1036,6 +1211,30 @@ def _worker_environment(session, policy):
                 os.environ[key] = value
 
 
+def _started_task_rollback(session, root, task_id, before):
+    """Undo our lone start event, or record an explicit manual recovery state."""
+    current = _read(root / ".project/state.json")
+    previous = json.loads(before)
+    task = next((t for t in current["tasks"] if t["id"] == task_id), None)
+    if (current.get("revision") == previous.get("revision", -1) + 1
+            and task is not None and task.get("status") == "doing"):
+        path = root / ".project/state.json"
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as stream:
+            stream.write(before)
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary = stream.name
+        os.replace(temporary, path)
+        return True
+    state = _read(Path(session) / STATE)
+    state["yarim_baslatma"] = {
+        "task": task_id,
+        "recovery": (f"Proje kaydı eşzamanlı değişti; {task_id} görevini güvenli biçimde todo durumuna "
+                     "döndürüp 'proje hazirla'yı yeni bir oturumda yeniden çalıştırın.")}
+    _write(Path(session) / STATE, state)
+    return False
+
+
 def run(session, *, execute=False, worker=None, goals_db=None):
     from .yurutme import Yurutme
     with _lock(session):
@@ -1075,9 +1274,20 @@ def run(session, *, execute=False, worker=None, goals_db=None):
                 current = next(t for t in _project(root, "context", "--json")["tasks"] if t["id"] == candidate["id"])
                 if current["effective_status"] not in ("todo", "doing"):
                     raise ValueError("ontology dependencies are not ready for execution")
+                # The project record must remain untouched when any paid-run
+                # prerequisite rejects this attempt.
+                preflight_call(session, candidate["id"])
+                started = False
+                before = (root / ".project/state.json").read_bytes()
                 if current["status"] == "todo":
                     _event(root, {"action": "start_task"}, candidate["id"])
-                result = executor.yurut(gorev_id=candidate["id"], en_fazla=1)
+                    started = True
+                try:
+                    result = executor.yurut(gorev_id=candidate["id"], en_fazla=1)
+                except Exception:
+                    if started:
+                        _started_task_rollback(session, root, candidate["id"], before)
+                    raise
                 results.extend(result)
                 if not result or result[-1]["durum"] != "kabul":
                     break  # No paid replanning or self-certified review after failure.
@@ -1091,6 +1301,7 @@ def main(argv=None):
     prepare_parser.add_argument("session")
     prepare_parser.add_argument("--config", required=True)
     prepare_parser.add_argument("--graf-yok", action="store_true")
+    prepare_parser.add_argument("--cakismayi-kabul-et", metavar="GEREKCE")
     proposals = commands.add_parser("oneriler", help="Read-only derived work and parallel lanes")
     proposals.add_argument("root")
     proposals.add_argument("--max", type=int)
@@ -1118,7 +1329,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "hazirla":
-            result = prepare(args.session, args.config, graph=not args.graf_yok)
+            result = prepare(args.session, args.config, graph=not args.graf_yok, conflict_override=args.cakismayi_kabul_et)
         elif args.command == "oneriler":
             result = suggestions(args.root, args.max)
         elif args.command == "dogrula":
