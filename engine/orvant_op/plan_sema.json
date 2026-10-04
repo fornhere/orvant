@@ -67,6 +67,7 @@
           },
           "yazilabilir": {
             "type": "array",
+            "description": "Depoya göreli yol kalıplarıdır. / ile biten kalıp dizinin kendisini ve tüm altını kapsar; * tam bir yol bileşenindeki karakterlerle, ** sıfır veya daha çok yol bileşeniyle eşleşir.",
             "items": {
               "type": "string"
             }
