@@ -48,7 +48,7 @@ class DeriveLargeTests(unittest.TestCase):
                 if reference:
                     args.append('--reference')
                 result = subprocess.run(args, env=dict(os.environ, PYTHONHASHSEED=seed),
-                                        capture_output=True, text=True, check=True)
+                                        capture_output=True, text=True, encoding='utf-8', check=True)
                 hashes.append(json.loads(result.stdout)['sha256'])
         self.assertEqual(len(set(hashes)), 1)
 
@@ -133,6 +133,6 @@ class DeriveLargeTests(unittest.TestCase):
         for seed in ('1', '7', '42'):
             result = subprocess.run([sys.executable, str(script), '--count', '400',
                 '--proposals', '35', '--graph'], env=dict(os.environ, PYTHONHASHSEED=seed),
-                capture_output=True, text=True, check=True)
+                capture_output=True, text=True, encoding='utf-8', check=True)
             hashes.append(json.loads(result.stdout)['sha256'])
         self.assertEqual(len(set(hashes)), 1)

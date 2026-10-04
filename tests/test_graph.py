@@ -509,7 +509,7 @@ import('./absent');
         spec.write_text(json.dumps(self.state), encoding='utf-8')
         def cli(*args):
             return subprocess.run([sys.executable, str(SCRIPTS / 'project.py'), *args],
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, encoding='utf-8')
         initialized = cli('init', str(self.root), '--spec', str(spec))
         self.assertEqual(initialized.returncode, 0, initialized.stdout + initialized.stderr)
         output = self.root / 'source.json'

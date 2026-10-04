@@ -1,6 +1,7 @@
 """Work derivation and conflict lanes over synthetic, temporary projects."""
 import copy
 import json
+import locale
 from pathlib import Path
 import subprocess
 import sys
@@ -26,7 +27,8 @@ class DeriveTests(unittest.TestCase):
 
     def cli(self, command, *args):
         result = subprocess.run([sys.executable, str(SCRIPTS / 'project.py'), command,
-                                 str(self.root), *map(str, args)], capture_output=True, text=True)
+                                 str(self.root), *map(str, args)], capture_output=True, text=True,
+                                encoding='utf-8')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout)
 
@@ -75,6 +77,14 @@ class DeriveTests(unittest.TestCase):
         self.reopen_changed_pair()
         self.assertFalse(any(p['task_id'] in ('run-a', 'evaluate-a')
                              for p in self.cli('derive')['proposals']))
+
+    def test_cli_json_is_decoded_as_utf8_when_locale_is_legacy(self):
+        self.scenario()
+        self.install()
+        with patch.object(locale, 'getencoding', return_value='cp1252'):
+            proposal = next(p for p in self.cli('derive')['proposals']
+                            if p['because'].get('object_id') == 'scenario-x')
+        self.assertEqual(proposal['acceptance'], ['Tam olarak kayıtlı ölçüt.'])
 
     def test_doing_task_is_not_reopened_by_derive(self):
         self.reopen_changed_pair()
