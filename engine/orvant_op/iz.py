@@ -135,7 +135,7 @@ def kaydet(iz_yolu, proje, is_turu, *, aktor_tur="orvant", kimlik="karsilama",
                     mudahale_bolumu=mudahale_bolumu)
         anahtar = (str(Path(yol).resolve()), item["proje"])
         operator = aktor_tur == "orvant" and kimlik == "operator"
-        if aktor_tur in {"orvant", "codex"} and kimlik != "operator":
+        if aktor_tur in {"orvant", "codex", "claude"} and kimlik != "operator":
             if anahtar in _ust_eylemler:
                 item["ham"].setdefault("ust_olay", _ust_eylemler[anahtar])
         yaz(Path(yol), item)

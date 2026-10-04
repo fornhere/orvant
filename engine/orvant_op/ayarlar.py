@@ -26,6 +26,9 @@ Dosya biçimi::
     [karsilama]
     arastirma_konu_siniri = 3   # ortam: ORVANT_ARASTIRMA_KONU_SINIRI
 
+    [operator]
+    kota_esigi = 80             # isteğe bağlı; yoksa kapalı (ortam: ORVANT_KOTA_ESIGI, "kapali")
+
 Modül yalnız standart kitaplığı kullanır ve orvant_op/orvant_gelisim içinden hiçbir şey
 içe aktarmaz; böylece her katman (orvant_gelisim.kayit dahil) döngüsüz kullanabilir.
 Çağrı yerleri bu modülden çalışma anında çözülür.
@@ -72,7 +75,7 @@ def _oku(yol):
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
-    for bolum in ("modeller", "codex", "yollar", "karsilama"):
+    for bolum in ("modeller", "codex", "claude", "yurutucu", "yollar", "karsilama"):
         if bolum in veri and not isinstance(veri[bolum], dict):
             raise AyarHatasi(f"{yol}: [{bolum}] tablo olmalı")
     return veri
@@ -168,6 +171,51 @@ def codex_ikili(baslangic=None):
     return codex_ikili_kaynakli(baslangic)[0]
 
 
+YURUTUCU_TURLERI = ("codex", "claude")
+CLAUDE_IKILI = "claude"
+
+
+def yurutucu_turu_kaynakli(baslangic=None):
+    """B-Y: işçi/şemalı çağrı yürütücüsü; ortam > [yurutucu].tur > ``codex``."""
+    if os.environ.get("ORVANT_YURUTUCU"):
+        deger, kaynak = os.environ["ORVANT_YURUTUCU"], "ortam:ORVANT_YURUTUCU"
+    else:
+        deger, dosya = _dosyadan("yurutucu", "tur", baslangic)
+        if deger is None:
+            return "codex", "varsayilan"
+        kaynak = str(dosya)
+    if deger not in YURUTUCU_TURLERI:
+        raise AyarHatasi(f"{kaynak}: yürütücü türü {YURUTUCU_TURLERI} içinden olmalı: {deger!r}")
+    return deger, kaynak
+
+
+def yurutucu_turu(baslangic=None):
+    """``"codex"`` (varsayılan) ya da ``"claude"``."""
+    return yurutucu_turu_kaynakli(baslangic)[0]
+
+
+def claude_ikili_kaynakli(baslangic=None):
+    if os.environ.get("ORVANT_CLAUDE"):
+        return _metin(os.environ["ORVANT_CLAUDE"], "ORVANT_CLAUDE"), "ortam:ORVANT_CLAUDE"
+    deger, dosya = _dosyadan("claude", "ikili", baslangic)
+    if deger is not None:
+        return _metin(deger, f"{dosya} [claude].ikili"), str(dosya)
+    return CLAUDE_IKILI, "varsayilan"
+
+
+def claude_ikili(baslangic=None):
+    """Claude Code CLI komut adı veya yolu (varsayılan ``claude``)."""
+    return claude_ikili_kaynakli(baslangic)[0]
+
+
+def claude_model(baslangic=None):
+    """Claude yürütücüsünün modeli; ayarlı değilse ``None`` (Claude Code varsayılanı)."""
+    if os.environ.get("ORVANT_CLAUDE_MODEL"):
+        return _metin(os.environ["ORVANT_CLAUDE_MODEL"], "ORVANT_CLAUDE_MODEL")
+    deger, dosya = _dosyadan("claude", "model", baslangic)
+    return None if deger is None else _metin(deger, f"{dosya} [claude].model")
+
+
 def arastirma_konu_siniri(baslangic=None):
     """Çağrı başına konu bütçesi: ortam > [karsilama].arastirma_konu_siniri > 3."""
     ad = "ORVANT_ARASTIRMA_KONU_SINIRI"
@@ -182,6 +230,29 @@ def arastirma_konu_siniri(baslangic=None):
             deger = 3
     if type(deger) is not int or deger < 1:
         raise AyarHatasi("araştırma konu sınırı pozitif tam sayı olmalı")
+    return deger
+
+
+def kota_esigi(baslangic=None):
+    """G-162: surdur kota eşiği (yüzde): ortam > [operator].kota_esigi > None (kapalı; kullanıcı kararı)."""
+    ad = "ORVANT_KOTA_ESIGI"
+    if ad in os.environ:
+        ham = os.environ[ad].strip()
+        if ham.casefold() == "kapali":
+            return None
+        try:
+            deger = float(ham)
+        except ValueError as exc:
+            raise AyarHatasi(f"{ad} 0 ile 100 arası sayı ya da 'kapali' olmalı") from exc
+    else:
+        deger, _ = _dosyadan("operator", "kota_esigi", baslangic)
+        if deger is None:
+            return None
+        if type(deger) not in (int, float):
+            raise AyarHatasi("[operator].kota_esigi 0 ile 100 arası sayı olmalı")
+        deger = float(deger)
+    if not 0 < deger <= 100:
+        raise AyarHatasi("kota eşiği 0 ile 100 arası (0 hariç) olmalı")
     return deger
 
 
@@ -236,9 +307,21 @@ def ozet(baslangic=None):
         "dosyalar": [str(p) for p in ayar_dosyalari(baslangic)],
         "modeller": modeller,
         "codex_ikili": {"deger": ikili, "kaynak": ikili_k},
+        "yurutucu": dict(zip(("deger", "kaynak"), yurutucu_turu_kaynakli(baslangic))),
+        "claude_ikili": dict(zip(("deger", "kaynak"), claude_ikili_kaynakli(baslangic))),
         "depo_koku": {"deger": str(depo), "kaynak": depo_k},
         "cekirdek_yolu": {"deger": str(cekirdek) if cekirdek else None, "kaynak": cekirdek_k},
     }
+
+
+def proje_kaydi_script():
+    """Depo ve yayın yerleşimindeki tek proje kaydı yazıcısını bulur."""
+    kok = depo_koku()
+    for yol in (kok / 'araclar/yayin/sablon/skills/orvant/scripts/project.py',
+                kok / 'skills/orvant/scripts/project.py'):
+        if yol.is_file():
+            return yol
+    raise ValueError('proje kaydı skill yazıcısı bulunamadı')
 
 
 def main(argv=None):
