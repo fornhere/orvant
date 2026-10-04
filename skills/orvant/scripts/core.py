@@ -106,10 +106,22 @@ def _input_snapshot(state, task, root):
     dependencies, _ = _task_dependencies(state)
     tasks = {t["id"]: t for t in state["tasks"]}
     generations = {key: tasks[key]["generation"] for key in dependencies[task["id"]]}
+    verification_files = []
+    for evidence in task.get("evidence", []):
+        try:
+            report = json.loads((Path(root) / _relative_path(evidence["path"])).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            continue
+        hashes = report.get("hashes") if isinstance(report, dict) else None
+        if isinstance(hashes, dict):
+            for path in sorted(hashes):
+                verification_files.append({"path": path, "sha256": _hash_file(root, path)})
     manifest = {"graph": graph, "producer_generations": generations,
                 "contract": {"input_fields": task.get("input_fields", {}),
                              "acceptance_rules": task.get("acceptance_rules", []),
                              "support_groups": task.get("support_groups", [])}}
+    if verification_files:
+        manifest["verification_files"] = verification_files
     return {"sha256": _manifest_hash(manifest), "manifest": manifest}
 
 
@@ -133,6 +145,8 @@ def _snapshot_changes(previous, current):
         for key in sorted(old_files.keys() | new_files.keys()):
             if old_files.get(key) != new_files.get(key):
                 reasons.append(f"domain file changed: {key[0]}.{key[1]}")
+    if old.get("verification_files") != new.get("verification_files"):
+        reasons.append("verification input file changed")
     if old.get("producer_generations") != new.get("producer_generations"):
         reasons.append("input producer completion changed")
     return reasons or ["domain input bindings changed"]
@@ -326,7 +340,9 @@ def _validate_task(state, task, objects, tasks, decisions):
         snap = task["input_snapshot"]
         if snap is not None:
             _shape(snap, {"sha256", "manifest"}, "input snapshot")
-            _shape(snap["manifest"], {"graph", "producer_generations", "contract"}, "snapshot manifest")
+            _shape(snap["manifest"], {"graph", "producer_generations", "contract"} |
+                   ({"verification_files"} if "verification_files" in snap["manifest"] else set()),
+                   "snapshot manifest")
             _require(type(snap["manifest"]["graph"]) is dict and type(snap["manifest"]["producer_generations"]) is dict,
                      "invalid snapshot graph or generations")
             _json_value(snap["manifest"], "snapshot manifest")
