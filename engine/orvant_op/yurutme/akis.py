@@ -1164,7 +1164,7 @@ class Yurutme:
             if goal["status"] == "blocked":
                 hatalar.append("Goal blocked: işçi engel bildirdi")
             elif goal["status"] in ("active", "paused", "budget_limited", "usage_limited", "okuma_hatasi"):
-                hatalar.append(f"Goal kapanmadı: {goal['status']}")
+                hatalar.append(f"Goal kapanmadı: {goal['status']}; aynı ağaçta devam et ve goal'ü kapat")
             inceleme = [k["id"] for k in gorev["kabul"] if k["tur"] == "insan_incelemesi"]
             karar = "ret" if hatalar else "inceleme_bekliyor" if inceleme else "kapi_gecti"
             makbuz = self._makbuz(gorev, deneme, thread_id=kosu["thread_id"],
@@ -1186,10 +1186,14 @@ class Yurutme:
                 return {"gorev": gorev["id"], "durum": "engelli", "makbuz": str(makbuz)}
             if hatalar:
                 if proje_ayarlari:
-                    gorev["durum"] = "engelli"
-                    self._kaydet_plan(plan)
-                    self._engel(gorev, "; ".join(hatalar))
-                    return {"gorev": gorev["id"], "durum": "engelli", "makbuz": str(makbuz)}
+                    goal_acik = (not kosu.get("zaman_asimi") and bool(degisen)
+                                 and goal.get("status") in ("active", "paused", "usage_limited", "okuma_hatasi")
+                                 and not ihlaller)
+                    if not goal_acik:
+                        gorev["durum"] = "engelli"
+                        self._kaydet_plan(plan)
+                        self._engel(gorev, "; ".join(hatalar))
+                        return {"gorev": gorev["id"], "durum": "engelli", "makbuz": str(makbuz)}
                 from orvant_op.yurutme.s4_kancasi import basarisizligi_isle
                 return basarisizligi_isle(self, plan, gorev, makbuz)
             if not hatalar:
