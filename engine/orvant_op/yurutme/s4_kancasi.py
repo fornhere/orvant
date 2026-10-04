@@ -193,7 +193,7 @@ def basarisizligi_isle(yurutme, plan, gorev, makbuz_yolu, *, istisna=None):
     kararlar = json.loads(karar_yolu.read_text(encoding="utf-8")) if karar_yolu.exists() else []
     envanter_yolu = yurutme.calisma / "plan" / "envanter.json"
     envanter = json.loads(envanter_yolu.read_text(encoding="utf-8")).get("kayitlar", []) if envanter_yolu.exists() else []
-    izinler = [{k: y.get(k) for k in ("id", "durum", "onay_olay_id")}
+    izinler = [{k: y.get(k) for k in ("id", "durum", "onay_olay_id", "ayrinti")}
               for y in plan["yetki_istekleri"] if y["id"] in gorev["yetki_istek_ids"]]
     plan_ozeti = {"surum": plan["surum"], "sozlesme_revizyon": plan["sozlesme_revizyon"],
                   "gorev": {k: gorev[k] for k in ("id", "amac", "yazilabilir", "kabul")},

@@ -402,10 +402,11 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                               and str(kayit.get("gecersiz_kilma_nedeni", "")).startswith("İptal: "))
                 if tamamlandi:
                     pass  # G-154: isteği gören deneme iptali bu kilitten önce tamamladı.
-                elif on and kayit.get("jeton") != on["jeton"]:
+                elif on and kayit and kayit.get("jeton") != on["jeton"]:
                     # G-156: gecikmede istenen deneme bitti ve yenisi başladı; kullanıcı onu iptal etmedi.
                     raise ValueError("iptal edilen deneme artık koşmuyor; yeni deneme başladı")
-                elif gorev is None or gorev["durum"] != "kosuyor":
+                elif (gorev is None or gorev["durum"] != "kosuyor"
+                      or (on and not kayit)):
                     raise ValueError("yalnız koşan görev iptal edilebilir")
                 else:
                     self._jeton_gecersiz_kil({gorev_id}, "İptal: " + gerekce)
@@ -420,8 +421,13 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                     if json.loads(yol.read_text(encoding="utf-8")).get("jeton") == on["jeton"]:
                         yol.unlink()
         # Kilit dışında: durdurulan işçinin süreci reddi yazmak için kilidi alabilmeli.
-        kayitli = (self._jetonlar().get(gorev_id, {}).get("isci") or {}).get("pgid")
-        isci = (on or {}).get("durdurulan", {}).get(kayitli) or self._isci_durdur(gorev_id)
+        jeton = on["jeton"] if on else kayit.get("jeton")
+        guncel = self._jetonlar().get(gorev_id, {})
+        isci = None
+        if guncel.get("jeton") == jeton:
+            kayitli = (guncel.get("isci") or {}).get("pgid", (on or {}).get("pgid"))
+            durdurulan = (on or {}).get("durdurulan", {})
+            isci = durdurulan.get(kayitli) or self._isci_durdur(gorev_id, jeton)
         return {"gorev": gorev_id, "durum": "engelli", "isci": isci}
 
     def denetim_isaretleri(self):

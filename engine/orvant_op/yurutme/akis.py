@@ -1,7 +1,6 @@
 """Plan görevlerini yalıtılmış ağaçta çalıştıran bağımsız kabul kapısı."""
 import contextlib
 import fcntl
-import fnmatch
 import hashlib
 import json
 import os
@@ -13,14 +12,13 @@ import tempfile
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
-from functools import lru_cache
 from math import ceil
 from pathlib import Path
 
 from orvant_op.iz import kaydet
 from orvant_op.bagimli_ciktilar import bagimli_ciktilar, bekleme_ciktilari
 from orvant_op.karsilama.roller import veri_dogrula
-from orvant_op.mimar.dogrulama import durumlari_hesapla
+from orvant_op.mimar.dogrulama import durumlari_hesapla, kalip_eslesir
 from orvant_op.mimar.durum import izin_yolu_dogrula
 from orvant_op.mimar.kehanet import Kehanet, calistir_kehanet, kehanet_yolu, okunabilir_girdiler, olcutler
 from orvant_op.mimar.kehanet import kehanet_gecersiz_mi, sozlesme_yolu
@@ -81,24 +79,7 @@ def goal_oku(thread_id, db_yolu=None):
 
 
 def _yol_eslesir(yol, kalip):
-    if not kalip or kalip.startswith("/") or ".." in Path(kalip).parts:
-        return False
-    # plan.json sözleşmesi: "/" ile biten kalıp dizinin kendisi ve altındaki her şeydir.
-    if kalip.endswith("/"):
-        kalip += "**"
-    # Her yıldız yalnız bir yol bileşenini, ** ise sıfır veya çok bileşeni kapsar.
-    yollar, kaliplar = yol.split("/"), kalip.split("/")
-
-    @lru_cache(None)
-    def esles(y, k):
-        if k == len(kaliplar):
-            return y == len(yollar)
-        if kaliplar[k] == "**":
-            return esles(y, k + 1) or (y < len(yollar) and esles(y + 1, k))
-        return (y < len(yollar) and fnmatch.fnmatchcase(yollar[y], kaliplar[k])
-                and esles(y + 1, k + 1))
-
-    return esles(0, 0)
+    return kalip_eslesir(yol, kalip)
 
 
 def _degisenler(agac):

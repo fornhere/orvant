@@ -93,15 +93,23 @@ class DenemeMixin:
             return None
         _json_yaz(self._iptal_istegi_yolu(gorev_id), {
             "jeton": kayit["jeton"], "gerekce": gerekce, "t": datetime.now(timezone.utc).isoformat()})
-        durdurulan = {}
+        durdurulan, son_pgid = {}, None
         # İstekten önce kaydedilmiş yeni grup da durdurulur; sonrakini _isci_basladi reddeder.
         for _ in range(2):
-            isci = self._jetonlar().get(gorev_id, {}).get("isci")
+            guncel = self._jetonlar().get(gorev_id, {})
+            if guncel.get("jeton") != kayit["jeton"]:
+                break
+            isci = guncel.get("isci")
             if not isci or isci["pgid"] in durdurulan:
                 break
+            son_pgid = isci["pgid"]
             durdurulan[isci["pgid"]] = grup_durdur(isci["pgid"], isci.get("baslangic"))
             self._olay("isci_durduruldu", gorev_id, **durdurulan[isci["pgid"]])
-        return {"jeton": kayit["jeton"], "durdurulan": durdurulan}
+        on = {"jeton": kayit["jeton"], "durdurulan": durdurulan}
+        if durdurulan:
+            # Temizlik kaydı silse de aynı jeton için seçilmiş son grubu açıkça eşleştir.
+            on["pgid"] = son_pgid
+        return on
 
     def _isci_basladi(self, pgid):
         """İşçi süreç grubunu jetona bağlar; iptal bu kayıtla grubu durdurur (G-105)."""
@@ -119,8 +127,20 @@ class DenemeMixin:
             # Kayıttan sonra denetlenir: kilitsiz iptal ya bu grubu okur ya da istek burada görülür.
             self._iptal_denetle(deneme["gorev"], deneme["jeton"])
 
-    def _isci_durdur(self, gorev_id):
-        isci = self._jetonlar().get(gorev_id, {}).get("isci")
+    def _isci_kaydi_sil(self, gorev_id, jeton):
+        """Biten denemenin PGID kaydını siler; başka denemenin kaydı korunur."""
+        with self._kilit():
+            jetonlar = self._jetonlar()
+            kayit = jetonlar.get(gorev_id, {})
+            if kayit.get("jeton") == jeton:
+                kayit.pop("isci", None)
+                _json_yaz(self.kok / "jetonlar.json", jetonlar)
+
+    def _isci_durdur(self, gorev_id, jeton=None):
+        kayit = self._jetonlar().get(gorev_id, {})
+        if jeton is not None and kayit.get("jeton") != jeton:
+            return None
+        isci = kayit.get("isci")
         if not isci:
             return None
         sonuc = grup_durdur(isci["pgid"], isci.get("baslangic"))
@@ -267,4 +287,5 @@ class DenemeMixin:
                 self._uzlastir()
                 self._olay("gorev_denemesi_bitti", gorev["id"],
                            gorev_denemesi=self._deneme["deneme"], **bitis)
+                self._isci_kaydi_sil(gorev["id"], self._deneme["jeton"])
             self._sahip, self._deneme = eski_sahip, eski_deneme
