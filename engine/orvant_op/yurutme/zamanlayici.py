@@ -1,5 +1,6 @@
 """S3 paralel yürütmesi, yürütme grupları ve kabul edilmiş çıktıların etki kümesi."""
 import concurrent.futures
+import contextlib
 import fcntl
 import fnmatch
 import hashlib
@@ -388,17 +389,40 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
     def iptal(self, gorev_id, gerekce):
         if not gerekce.strip():
             raise ValueError("iptal gerekçesi gerekli")
-        with self._kilit():
-            plan = self._plan()
-            gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
-            if gorev is None or gorev["durum"] != "kosuyor":
-                raise ValueError("yalnız koşan görev iptal edilebilir")
-            self._jeton_gecersiz_kil({gorev_id}, "İptal: " + gerekce)
-            gorev["durum"] = "engelli"
-            self._kaydet_plan(plan)
-            self._engel(gorev, "İptal: " + gerekce)
-            self._olay("deneme_iptal_edildi", gorev_id, gerekce=gerekce)
-            return {"gorev": gorev_id, "durum": "engelli"}
+        # G-153: birleşik ağaç ve S4 yeniden denetim kapıları kilidi tutarak koşar; kilitten önce
+        # istek bırakılır ve kayıtlı grup durdurulur ki kapı bitsin ve deneme birleşmeden reddedilsin.
+        on = self._iptal_istegi_birak(gorev_id, gerekce)
+        try:
+            with self._kilit():
+                plan = self._plan()
+                gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
+                kayit = self._jetonlar().get(gorev_id, {})
+                tamamlandi = (on and gorev is not None and gorev["durum"] == "engelli"
+                              and kayit.get("jeton") == on["jeton"] and not kayit.get("gecerli")
+                              and str(kayit.get("gecersiz_kilma_nedeni", "")).startswith("İptal: "))
+                if tamamlandi:
+                    pass  # G-154: isteği gören deneme iptali bu kilitten önce tamamladı.
+                elif on and kayit.get("jeton") != on["jeton"]:
+                    # G-156: gecikmede istenen deneme bitti ve yenisi başladı; kullanıcı onu iptal etmedi.
+                    raise ValueError("iptal edilen deneme artık koşmuyor; yeni deneme başladı")
+                elif gorev is None or gorev["durum"] != "kosuyor":
+                    raise ValueError("yalnız koşan görev iptal edilebilir")
+                else:
+                    self._jeton_gecersiz_kil({gorev_id}, "İptal: " + gerekce)
+                    gorev["durum"] = "engelli"
+                    self._kaydet_plan(plan)
+                    self._engel(gorev, "İptal: " + gerekce)
+                    self._olay("deneme_iptal_edildi", gorev_id, gerekce=gerekce)
+        finally:
+            if on:
+                yol = self._iptal_istegi_yolu(gorev_id)
+                with contextlib.suppress(OSError, ValueError):
+                    if json.loads(yol.read_text(encoding="utf-8")).get("jeton") == on["jeton"]:
+                        yol.unlink()
+        # Kilit dışında: durdurulan işçinin süreci reddi yazmak için kilidi alabilmeli.
+        kayitli = (self._jetonlar().get(gorev_id, {}).get("isci") or {}).get("pgid")
+        isci = (on or {}).get("durdurulan", {}).get(kayitli) or self._isci_durdur(gorev_id)
+        return {"gorev": gorev_id, "durum": "engelli", "isci": isci}
 
     def denetim_isaretleri(self):
         """Salt okuma: kuru turda kilit dosyası bile oluşturmaz."""

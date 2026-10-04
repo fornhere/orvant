@@ -6,11 +6,20 @@ from datetime import datetime, timezone
 
 from orvant_op.butce import (aktif_rezervasyonlar, butce_tabani, gorev_envanteri, harcamalar,
                              kok_butce_durumu, satirlar)
+from orvant_op.yurutucu import grup_durdur, surec_baslangici
 from .akis import _ekle, _json_yaz
 
 
 class EskiDeneme(Exception):
     """S4 hatası değildir; denemenin yazma yetkisi geri alınmıştır."""
+
+
+class IptalIstegi(EskiDeneme):
+    """Etkin jetona bağlı kullanıcı iptal isteği (G-153/G-154)."""
+
+    def __init__(self, jeton, gerekce):
+        super().__init__("İptal: " + gerekce)
+        self.jeton, self.gerekce = jeton, gerekce
 
 
 class DenemeMixin:
@@ -38,6 +47,85 @@ class DenemeMixin:
             kayit = self._jetonlar().get(gorev_id, {})
             if kayit.get("jeton") != jeton or not kayit.get("gecerli"):
                 raise EskiDeneme(kayit.get("gecersiz_kilma_nedeni") or "Yeni deneme sahipliği devraldı")
+            self._iptal_denetle(gorev_id, jeton)
+
+    def _iptal_istegi_yolu(self, gorev_id):
+        return self.kok / "iptal_istekleri" / f"{gorev_id}.json"
+
+    def _iptal_denetle(self, gorev_id, jeton):
+        """G-153: kilidi bekleyen iptal, kilit tutan denemeyi jetonuna bağlı istekle durdurur."""
+        try:
+            istek = json.loads(self._iptal_istegi_yolu(gorev_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if istek.get("jeton") == jeton:
+            raise IptalIstegi(jeton, istek.get("gerekce", ""))
+
+    def _iptali_tamamla(self, gorev_id, jeton, gerekce):
+        """G-154: istek bırakan iptal kilitli adımdan önce çöktüyse deneme iptali kendisi bitirir."""
+        with self._kilit():
+            kayit = self._jetonlar().get(gorev_id, {})
+            plan = self._plan()
+            gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
+            if kayit.get("jeton") == jeton and kayit.get("gecerli") and gorev and gorev["durum"] == "kosuyor":
+                # Yazım kullanıcının iptali adınadır; reddedilen denemenin sahipliğiyle yapılmaz.
+                sahip, self._sahip = self._sahip, None
+                try:
+                    self._jeton_gecersiz_kil({gorev_id}, "İptal: " + gerekce)
+                    gorev["durum"] = "engelli"
+                    self._kaydet_plan(plan)
+                    self._engel(gorev, "İptal: " + gerekce)
+                    self._olay("deneme_iptal_edildi", gorev_id, gerekce=gerekce, tamamlayan="deneme")
+                finally:
+                    self._sahip = sahip
+            yol = self._iptal_istegi_yolu(gorev_id)
+            try:
+                if json.loads(yol.read_text(encoding="utf-8")).get("jeton") == jeton:
+                    yol.unlink()
+            except (OSError, ValueError):
+                pass
+
+    def _iptal_istegi_birak(self, gorev_id, gerekce):
+        """Kilitsiz ön adım (G-153): koşan denemenin jetonuna istek yazar, kayıtlı grubu durdurur."""
+        gorev = next((g for g in self._plan()["gorevler"] if g["id"] == gorev_id), None)
+        kayit = self._jetonlar().get(gorev_id, {})
+        if gorev is None or gorev["durum"] != "kosuyor" or not kayit.get("gecerli"):
+            return None
+        _json_yaz(self._iptal_istegi_yolu(gorev_id), {
+            "jeton": kayit["jeton"], "gerekce": gerekce, "t": datetime.now(timezone.utc).isoformat()})
+        durdurulan = {}
+        # İstekten önce kaydedilmiş yeni grup da durdurulur; sonrakini _isci_basladi reddeder.
+        for _ in range(2):
+            isci = self._jetonlar().get(gorev_id, {}).get("isci")
+            if not isci or isci["pgid"] in durdurulan:
+                break
+            durdurulan[isci["pgid"]] = grup_durdur(isci["pgid"], isci.get("baslangic"))
+            self._olay("isci_durduruldu", gorev_id, **durdurulan[isci["pgid"]])
+        return {"jeton": kayit["jeton"], "durdurulan": durdurulan}
+
+    def _isci_basladi(self, pgid):
+        """İşçi süreç grubunu jetona bağlar; iptal bu kayıtla grubu durdurur (G-105)."""
+        deneme = getattr(self, "_deneme", None)
+        if not deneme:
+            return
+        with self._kilit():
+            jetonlar = self._jetonlar()
+            kayit = jetonlar.get(deneme["gorev"], {})
+            if kayit.get("jeton") != deneme["jeton"] or not kayit.get("gecerli"):
+                # Başlatma ile iptal yarışı: grup_run bu istisnada grubu sonlandırır.
+                raise EskiDeneme(kayit.get("gecersiz_kilma_nedeni") or "Yeni deneme sahipliği devraldı")
+            kayit["isci"] = {"pgid": pgid, "baslangic": surec_baslangici(pgid)}
+            _json_yaz(self.kok / "jetonlar.json", jetonlar)
+            # Kayıttan sonra denetlenir: kilitsiz iptal ya bu grubu okur ya da istek burada görülür.
+            self._iptal_denetle(deneme["gorev"], deneme["jeton"])
+
+    def _isci_durdur(self, gorev_id):
+        isci = self._jetonlar().get(gorev_id, {}).get("isci")
+        if not isci:
+            return None
+        sonuc = grup_durdur(isci["pgid"], isci.get("baslangic"))
+        self._olay("isci_durduruldu", gorev_id, **sonuc)
+        return sonuc
 
     def _deftere_yaz(self, tur, **veri):
         _ekle(self.kok / "butce_defteri.jsonl", {
@@ -146,6 +234,8 @@ class DenemeMixin:
             self._makbuz(gorev, deneme["deneme"], **deneme.get("isci", {}), **alanlar)
         self._olay("eski_deneme_reddedildi", gorev["id"], makbuz=str(yol), neden=str(neden))
         self._iz("dogrulama", str(neden), sonuc="ret", gorev=gorev["id"], kanit=[str(yol)])
+        if isinstance(neden, IptalIstegi):
+            self._iptali_tamamla(gorev["id"], neden.jeton, neden.gerekce)
         return {"gorev": gorev["id"], "durum": "eski_deneme_reddedildi", "makbuz": str(yol)}
 
     def _gorev_yurut(self, plan, gorev, *, izin_yollari=()):
