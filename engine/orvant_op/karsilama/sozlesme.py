@@ -189,13 +189,18 @@ def kapi(sozlesme, olaylar):
 def v03_spec(sozlesme):
     if not sozlesme.get("onay") or sozlesme["onay"]["revizyon"] != sozlesme["revizyon"] or sozlesme["onay"]["durum"] != "onaylandi":
         raise ValueError("tam revizyon onayı olmadan v0.3 spec üretilmez")
+    return _spec_govdesi(sozlesme)
+
+
+def _spec_govdesi(sozlesme, *, proje_kaydi=False):
+    """Saf spec gövdesi; köprü kategorisiz ve açık plan kararlarını da taşır."""
     goal = sozlesme["hedef"]
     slug = re.sub(r"[^a-z0-9]+", "-", goal.lower().encode("ascii", "ignore").decode()).strip("-")[:40]
     if not slug:
         slug = "yeni-proje"
     kararlar = sozlesme["kararlar"]
-    scope = [k["deger"] for k in kararlar if k["kategori"] == "islevsel_kapsam" and k["durum"] == "cozuldu" and k.get("deger")]
-    constraints = [k["deger"] for k in kararlar if k["kategori"] == "kisitlar" and k["durum"] == "cozuldu" and k.get("deger")]
+    scope = [k["deger"] for k in kararlar if (k.get("kategori") if proje_kaydi else k["kategori"]) == "islevsel_kapsam" and k["durum"] == "cozuldu" and k.get("deger")]
+    constraints = [k["deger"] for k in kararlar if (k.get("kategori") if proje_kaydi else k["kategori"]) == "kisitlar" and k["durum"] == "cozuldu" and k.get("deger")]
     constraints.append("Yetki: varsayılan ret")
     constraints.extend(f"İzin: {i['eylem']} — {i['kapsam']} (onay: {i['onay_olay_id']})"
                        for i in sozlesme["yetki"]["izinler"])
@@ -205,7 +210,8 @@ def v03_spec(sozlesme):
                      if k["durum"] == "cozuldu" and k.get("deger") and
                      any(ad in k["baslik"].casefold() for ad in ("hedef kitle", "kullanıcı kitlesi", "audience"))),
                     "Belirlenmedi")
-    questions = [k["soru"]["metin"] for k in kararlar if k["durum"] == "ertelendi"]
+    questions = [k["soru"]["metin"] for k in kararlar
+                 if (k["durum"] != "cozuldu" if proje_kaydi else k["durum"] == "ertelendi")]
     questions.extend(sozlesme.get("open_questions", []))
     return {"schema_version": 3, "revision": 0,
             "project": {"id": slug, "name": goal, "goal": goal, "audience": audience,
