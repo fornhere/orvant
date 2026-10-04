@@ -19,6 +19,12 @@ Dosya biçimi::
     [codex]
     ikili = "codex"
 
+    [yurutucu]               # yoksa PATH'teki tek Codex/Claude otomatik seçilir
+    tur = "claude"
+
+    [kehanet]
+    yalitim = "auto"         # auto | bwrap | codex
+
     [yollar]                   # göreli yol, dosyanın bulunduğu dizine göredir
     depo = "."
     cekirdek = "../orvant-beceri"
@@ -36,6 +42,7 @@ içe aktarmaz; böylece her katman (orvant_gelisim.kayit dahil) döngüsüz kull
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tomllib
 
@@ -75,7 +82,7 @@ def _oku(yol):
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
-    for bolum in ("modeller", "codex", "claude", "yurutucu", "yollar", "karsilama"):
+    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama"):
         if bolum in veri and not isinstance(veri[bolum], dict):
             raise AyarHatasi(f"{yol}: [{bolum}] tablo olmalı")
     return veri
@@ -176,13 +183,23 @@ CLAUDE_IKILI = "claude"
 
 
 def yurutucu_turu_kaynakli(baslangic=None):
-    """B-Y: işçi/şemalı çağrı yürütücüsü; ortam > [yurutucu].tur > ``codex``."""
+    """İşçi yürütücüsü: ortam > dosya > kurulu ikililerin tek anlamlı seçimi."""
     if os.environ.get("ORVANT_YURUTUCU"):
         deger, kaynak = os.environ["ORVANT_YURUTUCU"], "ortam:ORVANT_YURUTUCU"
     else:
         deger, dosya = _dosyadan("yurutucu", "tur", baslangic)
         if deger is None:
-            return "codex", "varsayilan"
+            bulunan = [tur for tur, ikili in (("codex", codex_ikili(baslangic)),
+                                               ("claude", claude_ikili(baslangic)))
+                       if shutil.which(ikili)]
+            secim = ("ORVANT_YURUTUCU=codex|claude ya da orvant.toml [yurutucu] "
+                     "tur=... ile seç; komut: export ORVANT_YURUTUCU=claude "
+                     "(kaynak: otomatik algılama)")
+            if len(bulunan) == 1:
+                return bulunan[0], f"algilandi:{bulunan[0]}"
+            if bulunan:
+                raise AyarHatasi(f"iki yürütücü bulundu: {secim}")
+            raise AyarHatasi(f"yürütücü bulunamadı (codex/claude PATH'te veya ayarlı ikili yolunda yok): {secim}")
         kaynak = str(dosya)
     if deger not in YURUTUCU_TURLERI:
         raise AyarHatasi(f"{kaynak}: yürütücü türü {YURUTUCU_TURLERI} içinden olmalı: {deger!r}")
@@ -190,8 +207,18 @@ def yurutucu_turu_kaynakli(baslangic=None):
 
 
 def yurutucu_turu(baslangic=None):
-    """``"codex"`` (varsayılan) ya da ``"claude"``."""
+    """Açıkça seçilmiş veya otomatik algılanmış ``codex``/``claude``."""
     return yurutucu_turu_kaynakli(baslangic)[0]
+
+
+def kehanet_yalitimi(baslangic=None):
+    """Kehanet OS yalıtım arka ucu: ``auto``, ``bwrap`` veya ``codex``."""
+    deger, dosya = _dosyadan("kehanet", "yalitim", baslangic)
+    if deger is None:
+        return "auto"
+    if deger not in ("auto", "bwrap", "codex"):
+        raise AyarHatasi(f"{dosya} [kehanet].yalitim auto|bwrap|codex olmalı: {deger!r}")
+    return deger
 
 
 def claude_ikili_kaynakli(baslangic=None):
@@ -303,11 +330,16 @@ def ozet(baslangic=None):
     ikili, ikili_k = codex_ikili_kaynakli(baslangic)
     depo, depo_k = depo_koku_kaynakli(baslangic)
     cekirdek, cekirdek_k = cekirdek_yolu_kaynakli(baslangic)
+    try:
+        yurutucu = dict(zip(("deger", "kaynak"), yurutucu_turu_kaynakli(baslangic)))
+    except AyarHatasi as exc:
+        # Tanı komutu tam da bozuk/belirsiz ayarı gösterebilmelidir.
+        yurutucu = {"deger": None, "kaynak": "hata", "hata": str(exc)}
     return {
         "dosyalar": [str(p) for p in ayar_dosyalari(baslangic)],
         "modeller": modeller,
         "codex_ikili": {"deger": ikili, "kaynak": ikili_k},
-        "yurutucu": dict(zip(("deger", "kaynak"), yurutucu_turu_kaynakli(baslangic))),
+        "yurutucu": yurutucu,
         "claude_ikili": dict(zip(("deger", "kaynak"), claude_ikili_kaynakli(baslangic))),
         "depo_koku": {"deger": str(depo), "kaynak": depo_k},
         "cekirdek_yolu": {"deger": str(cekirdek) if cekirdek else None, "kaynak": cekirdek_k},

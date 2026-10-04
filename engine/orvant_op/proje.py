@@ -95,7 +95,8 @@ def _git(root, *args):
 
 def _project(root, command, *args):
     result = subprocess.run([sys.executable, str(Path(root) / ".project/scripts/project.py"),
-                             command, str(root), *map(str, args)], capture_output=True, text=True)
+                             command, str(root), *map(str, args)], capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL, timeout=30)
     try:
         value = json.loads(result.stdout)
     except ValueError as exc:
@@ -501,7 +502,9 @@ def _prepare(session, config_path, *, graph, staging):
            for index, a in enumerate(roots) for b in roots[index + 1:]):
         raise ValueError("session, project and execution repository must be separate siblings")
     policy = config["policy"]
-    executor = policy.get("executor", "codex")
+    executor = policy.get("executor")
+    if executor is None:
+        raise ValueError("explicit executor required: codex or claude")
     if executor not in ("codex", "claude"):
         raise ValueError(f"unknown executor: {executor}; expected codex or claude")
     fields = {"model", "effort", "codex", "max_worker_runs", "token_per_attempt",
@@ -1012,7 +1015,7 @@ def sync(session, task_id):
 @contextlib.contextmanager
 def _worker_environment(session, policy):
     changes = {"ORVANT_MODEL_ISCI": policy["model"],
-               "ORVANT_YURUTUCU": policy.get("executor", "codex"),
+               "ORVANT_YURUTUCU": policy["executor"],
                "ORVANT_IZ_DIZINI": str(Path(session) / "worker-calibration")}
     if changes["ORVANT_YURUTUCU"] == "codex":
         changes["ORVANT_CODEX"] = policy["codex"]
@@ -1045,7 +1048,7 @@ def run(session, *, execute=False, worker=None, goals_db=None):
         with _worker_environment(session, policy):
             class ProjectExecution(Yurutme):
                 def _isci_sonrasi(self, gorev, deneme, kosu, goal):
-                    if policy.get("executor", "codex") == "claude":
+                    if policy["executor"] == "claude":
                         goal.clear()
                         goal.update(kosu.get("project_goal") or {"status": "measurement_missing", "tokens_used": None})
                         kosu["thread_id"] = kosu.get("session_id")

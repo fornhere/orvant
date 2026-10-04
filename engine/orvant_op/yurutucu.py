@@ -129,12 +129,31 @@ def surec_baslangici(pid):
     return stat.rsplit(")", 1)[1].split()[19]
 
 
+def grup_canli(pgid):
+    """Grupta çalışabilir süreç var mı; toplanmayan zombileri canlı sayma."""
+    proc = Path("/proc")
+    if proc.is_dir():
+        for yol in proc.iterdir():
+            if not yol.name.isdigit():
+                continue
+            try:
+                alanlar = (yol / "stat").read_text().rsplit(")", 1)[1].split()
+                if int(alanlar[2]) == pgid and alanlar[0] != "Z":
+                    return True
+            except (OSError, ValueError, IndexError):
+                continue
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
 def _grup_bitti(pgid, sure):
     son = time.monotonic() + sure
     while True:
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
+        if not grup_canli(pgid):
             return True
         if time.monotonic() >= son:
             return False
@@ -169,6 +188,74 @@ class YurutucuHatasi(RuntimeError):
 
 class YurutucuZamanAsimi(YurutucuHatasi):
     """Alt süreç süre sınırını aştı ve sonlandırıldı."""
+
+
+class YurutucuKimlikHatasi(YurutucuHatasi):
+    """Model CLI oturumu yok veya süresi dolmuş; işçi kusuru değildir."""
+
+
+def _hata_jsonlari(*metinler):
+    """CLI stdout/stderr içindeki tek JSON veya JSONL hata kayıtlarını döndürür."""
+    kayitlar = []
+    for metin in metinler:
+        for satir in (metin or "").splitlines():
+            try:
+                veri = json.loads(satir)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(veri, dict):
+                kayitlar.append(veri)
+    return kayitlar
+
+
+def _kimlik_hatasi(metin):
+    metin = str(metin).casefold()
+    return bool(re.search(r"\b(?:auth|login)\b", metin)) or any(isaret in metin for isaret in (
+        "authenticate", "authentication", "oauth", "not logged in", "not logged-in",
+        "login required", "please login", "unauthorized", "invalid credential", "expired session",
+    ))
+
+
+def _cli_hata_ayrintisi(stdout, stderr):
+    """İnsan mesajını ve bilinen makine teşhis alanlarını stderr kaybolmadan birleştirir."""
+    parcalar = []
+    for veri in _hata_jsonlari(stdout, stderr):
+        for alan in ("result", "message", "error"):
+            deger = veri.get(alan)
+            if deger not in (None, ""):
+                parcalar.append(str(deger))
+        for alan in ("terminal_reason", "api_error_status"):
+            if veri.get(alan) not in (None, ""):
+                parcalar.append(f"{alan}={veri[alan]}")
+    if not parcalar and stderr:
+        parcalar.append(stderr[-300:])
+    return "; ".join(dict.fromkeys(parcalar))[-600:]
+
+
+def _codex_kimlik_hatasi(stdout, stderr):
+    """Ajan içeriğini değil, yalnız Codex'in kendi hata kanallarını incele."""
+    if _kimlik_hatasi(stderr or ""):
+        return True
+    for veri in _hata_jsonlari(stdout):
+        if veri.get("type") not in ("error", "turn.failed"):
+            continue
+        hata = veri.get("error")
+        mesajlar = [veri.get("message")]
+        if isinstance(hata, dict):
+            mesajlar.extend((hata.get("message"), hata.get("code")))
+        elif hata is not None:
+            mesajlar.append(hata)
+        if _kimlik_hatasi(" ".join(str(m) for m in mesajlar if m is not None)):
+            return True
+    return False
+
+
+def _codex_rc_hatasi(proc):
+    ayrinti = _cli_hata_ayrintisi(proc.stdout, proc.stderr)
+    if _codex_kimlik_hatasi(proc.stdout, proc.stderr):
+        return YurutucuKimlikHatasi(
+            f"Codex oturumu geçersiz: codex login ile yeniden giriş yapın; {ayrinti}")
+    return YurutucuHatasi(f"codex exec rc={proc.returncode}: {ayrinti}")
 
 
 def semali_komut(*, model, effort, calisma, sema_yolu, son, sandbox="read-only", arama=False):
@@ -256,7 +343,7 @@ def calistir(istem, *, model, effort, calisma, sema_yolu, sandbox="read-only",
                                           ("cikti_token", "output_tokens")):
                         kullanim[hedef] += int(usage.get(kaynak, 0) or 0)
             if proc.returncode != 0:
-                raise YurutucuHatasi(f"codex exec rc={proc.returncode}: {(proc.stderr or '')[-300:]}")
+                raise _codex_rc_hatasi(proc)
             data = json.loads(son.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise YurutucuHatasi("son mesaj JSON nesnesi değil")
@@ -318,7 +405,7 @@ def hedef_calistir(istem, *, calisma, effort="high", iz_yolu=None,
                                       ("cikti_token", "output_tokens")):
                     kullanim[hedef] += int(usage.get(kaynak, 0) or 0)
         if rc:
-            hata = f"codex exec rc={rc}: {(proc.stderr or '')[-300:]}"
+            hata = str(_codex_rc_hatasi(proc))
     except subprocess.TimeoutExpired as exc:
         zaman_asimina_ugradi = True
         hata = f"İşçi zaman aşımı ({zaman_asimi} sn): {exc}"
@@ -367,7 +454,11 @@ def _claude_sonucu(proc):
                 "onbellek_token": int(usage.get("cache_read_input_tokens", 0) or 0),
                 "cikti_token": int(usage.get("output_tokens", 0) or 0)}
     if proc.returncode != 0:
-        raise YurutucuHatasi(f"claude -p rc={proc.returncode}: {(proc.stderr or '')[-300:]}")
+        ayrinti = _cli_hata_ayrintisi(proc.stdout, proc.stderr)
+        if _kimlik_hatasi(" ".join((proc.stdout or "", proc.stderr or "", ayrinti))):
+            raise YurutucuKimlikHatasi(
+                f"Claude Code oturumu geçersiz: claude ile yeniden giriş yapın; {ayrinti}")
+        raise YurutucuHatasi(f"claude -p rc={proc.returncode}: {ayrinti}")
     if not isinstance(veri, dict) or veri.get("is_error"):
         raise YurutucuHatasi(f"claude -p hata: {str(veri.get('result') if isinstance(veri, dict) else veri)[-300:]}")
     return veri, kullanim
