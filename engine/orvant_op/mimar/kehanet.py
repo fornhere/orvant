@@ -171,10 +171,14 @@ def karar_yollari(calisma, karar):
         aday = Path(ham.rstrip(".)]}" )).expanduser()
         adaylar = [aday] if aday.is_absolute() else [Path(calisma) / aday]
         for aday in adaylar:
-            if aday.exists() and (aday.is_file() or aday.is_dir()):
-                gercek = str(aday.resolve())
-                if gercek not in sonuc:
-                    sonuc.append(gercek)
+            try:
+                if aday.exists() and (aday.is_file() or aday.is_dir()):
+                    gercek = str(aday.resolve())
+                    if gercek not in sonuc:
+                        sonuc.append(gercek)
+            except OSError:
+                # Serbest karar metni dosya adı sınırını aşabilir; yol değildir.
+                continue
     return sonuc
 
 
@@ -808,14 +812,25 @@ def calistir_kehanet(yol, agac, girdiler, zaman_asimi=60):
     yardimci_gerekli = any(isinstance(d, ast.Name) and d.id == "isci_calistir"
                           for d in ast.walk(ast.parse(betik)))
     isci_ortami = {}  # İşçi ortamı miras alınmaz; -I -B yorumlayıcı kuralları argv ile sabittir.
-    onek, neden = bwrap_yalitimi(agac, env)
+    istenen_yalitim = ayarlar.kehanet_yalitimi(agac)
+    onek, neden = (bwrap_yalitimi(agac, env) if istenen_yalitim in ("auto", "bwrap")
+                   else (None, "ayar codex arka ucunu zorluyor"))
+    codex = ayarlar.codex_ikili(agac)
     if onek is not None:
         yalitim = "bwrap"
-    elif shutil.which(ayarlar.codex_ikili()):
+    elif istenen_yalitim != "bwrap" and shutil.which(codex):
         yalitim = "codex-sandbox"
     else:
+        try:
+            claude_secili = ayarlar.yurutucu_turu(agac) == "claude"
+        except ayarlar.AyarHatasi:
+            claude_secili = False
+        aciklama = ("Claude seçili ve bwrap yok: kehanet yalıtımı için bubblewrap kurun"
+                    if claude_secili and onek is None else
+                    f"kehanet OS yalıtımı yok; kapı koşmadı ({neden})")
         return {"kehanet": str(yol), "gecti": False, "kontroller": [],
-                "hata": f"kehanet OS yalıtımı yok; kapı koşmadı ({neden})"}
+                "yalitim": "yok",
+                "hata": aciklama}
     # Yardımcı güvenceyi ortamdan almaz: önsöz betikten ÖNCE mevcut OS sınırını yoklar.
     isci_ayar = ("ISCI_PYTHON = " + repr(sys.executable) + "\n" +
                  "ISCI_CIKTILAR = " + repr(frozenset(ciktilar)) + "\n" +
@@ -1017,7 +1032,7 @@ finally:
         komut = [sys.executable, "-I", "-B", "-c", koruma, str(yol)]
         if yalitim == "codex-sandbox":
             env["HOME"] = os.environ.get("HOME", "")
-            komut = [ayarlar.codex_ikili(), "sandbox", "--", *komut]
+            komut = [codex, "sandbox", "--", *komut]
         else:
             if yardimci_gerekli:
                 kok = str(Path(agac).resolve())
