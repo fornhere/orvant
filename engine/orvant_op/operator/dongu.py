@@ -136,6 +136,12 @@ class Operator:
         elif tur == "geri_alma":
             anahtar = "geri_alma"
             metin = f"{gorev['id']} yeniden denetimde kaldı. Geri alma komutunu inceleyin."
+        elif tur == "inceleme":
+            kabul_id = baglam["kabul_id"] = teshis["kabul_id"]
+            anahtar = kabul_id
+            metin = f"{gorev['id']} için {kabul_id} insan/duzenlemetör incelemesini yapın."
+            komut = self._komut("yurut", "incele", self.calisma, gorev["id"], kabul_id,
+                                "<inceleme notu>", "--sonuc", "<gecti|kaldi>")
         elif tur == "yetki":
             istek_id = (istek or {}).get("id")
             baglam["istek_id"] = istek_id
@@ -348,6 +354,10 @@ class Operator:
             if gorev["durum"] == "yetki_bekliyor":
                 sorular += [self._soru(gorev, "yetki", y["gerekce"], istek=y) for y in yetkiler
                             if y["id"] in gorev["yetki_istek_ids"]]
+            if gorev["durum"] == "inceleme_bekliyor":
+                sorular += [self._soru(gorev, "inceleme", "İnsan incelemesi bekleniyor",
+                                       teshis={"kabul_id": k["id"]})
+                            for k in gorev["kabul"] if k["tur"] == "insan_incelemesi"]
             if (gorev["durum"] == "girdi_bekliyor" and not yeni_olay
                     and (not kayit or kayit.get("eylem") != "girdi_bekle")):
                 sorular.append(self._soru(gorev, "girdi", girdiler[kimlik]["beklenen"]))

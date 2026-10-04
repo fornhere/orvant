@@ -23,6 +23,7 @@ TUR_DURUMLARI = {
     "yetki": {"yetki_bekliyor"}, "girdi": {"girdi_bekliyor"},
     "yukselt": {"engelli", "ret"}, "kabul_celiskisi": {"engelli", "ret"},
     "orvant_kusuru": {"engelli", "ret"}, "geri_alma": {"kabul"},
+    "inceleme": {"inceleme_bekliyor"},
 }
 
 
