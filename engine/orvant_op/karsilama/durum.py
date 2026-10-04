@@ -67,6 +67,21 @@ BOYUTLAR = {
 }
 
 
+def _bilesik_soru_mu(metin):
+    """Ayrı yanıt isteyen, noktalama ile birleştirilmiş soru cümlelerini bulur."""
+    metin = metin.strip()
+    return metin.count("?") > 1 or (";" in metin and metin.endswith("?"))
+
+
+def _kullanici_ortami_mi(metin):
+    """Açık iyelikle belirtilen kişisel ortam, web araştırmasının olgusu değildir."""
+    return bool(re.search(
+        r"\b(?:cihazınız|ağınız|hesabınız|verileriniz)\w*\b|"
+        r"\bveriniz(?:de|den|e|in)\b|"
+        r"\bkullanıcının\s+(?:cihaz|ağ|hesap|hesab|veri)\w*\b",
+        metin.casefold()))
+
+
 def _hedef_araclari(hedef):
     adaylar = re.findall(r"`([A-Za-z0-9._+-]+)`|\b([A-Za-z][A-Za-z0-9._+-]*[A-Z][A-Za-z0-9._+-]*)\b", hedef)
     adlar = {ad for cift in adaylar if (ad := next((x for x in cift if x), "")) and re.fullmatch(r"[A-Za-z][A-Za-z0-9._+-]*", ad)}
@@ -245,6 +260,8 @@ class Karsilama:
                 hatalar.append(f"{kimlik}: güvenli varsayılan çözülmüş, değerli ve kaynak=onerilen_varsayim olmalı")
             if kimlik in korunan:
                 continue  # Mevcut kullanıcı kararı aynen kalır; modelin yeni dayanağı uygulanmaz.
+            if _bilesik_soru_mu(k["soru"]["metin"]):
+                hatalar.append(f"{kimlik}: bileşik soru ayrı atomik kararlara bölünmeli")
             if iddia_ids is not None and not set(k["dayanak_iddia_ids"]) <= iddia_ids:
                 hatalar.append(f"{kimlik}: karar haritasında bilinmeyen iddia kaynağı: "
                               f"{sorted(set(k['dayanak_iddia_ids']) - iddia_ids)}")
@@ -264,6 +281,14 @@ class Karsilama:
         olay_ids = {e["id"] for e in girdi["kullanici_olaylari"]}
         for deneme in range(2):
             output = self._rol("karar_haritasi", girdi, "hedef_netlestirme")
+            gelen = (output["guncellenen_kararlar"] + output["yeni_kararlar"]
+                     if delta else output["kararlar"])
+            for k in gelen:
+                if (k["sahip"] == "arastirilabilir" and k["durum"] == "acik"
+                        and _kullanici_ortami_mi(k["baslik"] + " " + k["soru"]["metin"])):
+                    k["sahip"] = "kullanici"
+            output["arama_istekleri"] = [konu for konu in output["arama_istekleri"]
+                                        if not _kullanici_ortami_mi(konu)]
             hatalar = []
             if delta:
                 gelenler = output["guncellenen_kararlar"] + output["yeni_kararlar"]
