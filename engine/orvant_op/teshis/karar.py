@@ -185,6 +185,11 @@ def teshis_et(baglam):
         sinif, eylem, hipotez = "kod_hatasi", "yeniden_dene", "Kabul komutu gerçek hata verdi"
     elif durum in ("active", "paused", "hedef_yok", "usage_limited", "okuma_hatasi", "blocked"):
         sinif, eylem, hipotez = "yasam_dongusu", "yukselt", "Goal yaşam döngüsü belirsiz veya tamamlanmadı"
+    elif durum == "complete" and negatif.get("durum") == "anlamli":
+        # G-171 (gerçek koşu T14-2, örnek T01-1): kehanet çalıştı ve çıktıyı reddetti; red işçi istemine
+        # önceki hata olarak gider. Onarım sınırları aşağıda aynen uygulanır.
+        sinif, eylem = "kod_hatasi", "yeniden_dene"
+        hipotez = "Bağımsız kehanet çıktıyı reddetti: " + ", ".join(negatif["kanit"])
     else:
         sinif, eylem, hipotez = "bilinmeyen", "yukselt", "Kanıtlar güvenli otomatik eylemi belirlemiyor"
 
