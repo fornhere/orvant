@@ -59,6 +59,16 @@ class ProvenanceCase(unittest.TestCase):
 
 
 class ImmutableProvenanceTests(ProvenanceCase):
+    def test_g202_unrelated_json_evidence_preserves_input_snapshot(self):
+        task = self.state["tasks"][0]
+        baseline = core._input_snapshot(self.state, task, self.root)
+        self.assertNotIn("verification_files", baseline["manifest"])
+        for report in ([], None, 7, {"note": "synthetic evidence"}):
+            with self.subTest(report=report):
+                (self.root / "proof.json").write_text(json.dumps(report), encoding="utf-8")
+                task["evidence"] = [{"path": "proof.json"}]
+                self.assertEqual(core._input_snapshot(self.state, task, self.root), baseline)
+
     def test_immutable_object_semantics_cannot_be_replaced_but_display_label_can(self):
         self.state["ontology"]["object_types"][0]["immutable"] = True
         changed = copy.deepcopy(self.state["objects"][0])
