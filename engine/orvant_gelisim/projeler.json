@@ -1,0 +1,17 @@
+{
+  "surum": 1,
+  "aciklama": "Sentetik kanonik ad ve takma ad örneği.",
+  "projeler": {
+    "ornek-proje-v2": {
+      "takma_adlar": [
+        "ornek-proje"
+      ],
+      "calisma": "ornekler/ornek-proje-v2",
+      "depo": "/ornek/depo",
+      "gerekce": "Sentetik ad normalleştirme örneği."
+    },
+    "orvant": {
+      "takma_adlar": []
+    }
+  }
+}

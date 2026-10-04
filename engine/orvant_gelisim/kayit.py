@@ -4,6 +4,7 @@ import copy
 from datetime import datetime, timezone
 import fcntl
 import json
+import math
 import os
 import re
 import subprocess
@@ -26,7 +27,7 @@ OPERATOR = ("hedef_netlestirme", "karar_belgesi", "is_bolme", "brief_yazma",
             "yetki_karari", "olcum", "raporlama", "arastirma")
 ISLER = {**dict.fromkeys(OPERATOR, "operator"), "isci_kosusu": "isci",
           "kapi_karari": "kapi", "orvant_kayit": "kayit"}
-AKTORLER = {"orvant", "opus", "kullanici", "kullanici_benzetim", "codex", "dogrulayici"}
+AKTORLER = {"orvant", "opus", "kullanici", "kullanici_benzetim", "codex", "claude", "dogrulayici"}
 SONUCLAR = {"ok", "ret", "hata", "zaman_asimi", "iptal", "bilinmiyor"}
 MALIYET = ("girdi_token", "onbellek_token", "cikti_token", "saniye", "insan_dakika")
 ALANLAR = {"id", "t", "proje", "kosu", "aktor", "katman", "is_turu", "sonuc",
@@ -73,7 +74,7 @@ def denetle(o):
         raise ValueError("maliyet alanları geçersiz")
     for key in MALIYET:
         value = m[key]
-        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or (key.endswith("token") and not isinstance(value, int))):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)) or value < 0 or (key.endswith("token") and not isinstance(value, int))):
             raise ValueError(f"maliyet.{key} geçersiz")
     expected = o["katman"] == "operator" and a["tur"] != "orvant"
     if type(o["mudahale"]) is not bool or o["mudahale"] != expected:
@@ -133,10 +134,12 @@ def olay(*, proje, is_turu, aktor_tur=None, aktor_kimlik=None, aktor=None, katma
 
 def yaz(yol, item):
     denetle(item)
+    # Serileştirme açılıştan önce: reddedilen olay boş dosya bırakmasın (G-149).
+    satir = json.dumps(item, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
     with Path(yol).open("a", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
-            fh.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+            fh.write(satir)
             fh.flush()
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)

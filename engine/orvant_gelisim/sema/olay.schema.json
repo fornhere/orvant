@@ -11,7 +11,7 @@
     "kosu": {"type": ["string", "null"]},
     "yurutme_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{16}$"},
     "miras": {"type": "boolean"},
-    "aktor": {"type": "object", "additionalProperties": false, "required": ["tur", "kimlik"], "properties": {"tur": {"enum": ["orvant", "opus", "kullanici", "kullanici_benzetim", "codex", "dogrulayici"]}, "kimlik": {"type": "string", "minLength": 1}}},
+    "aktor": {"type": "object", "additionalProperties": false, "required": ["tur", "kimlik"], "properties": {"tur": {"enum": ["orvant", "opus", "kullanici", "kullanici_benzetim", "codex", "claude", "dogrulayici"]}, "kimlik": {"type": "string", "minLength": 1}}},
     "katman": {"enum": ["operator", "isci", "kapi", "kayit"]},
     "is_turu": {"enum": ["hedef_netlestirme", "karar_belgesi", "is_bolme", "brief_yazma", "yurutucu_secimi", "calisma_alani", "baslatma_izleme", "dogrulama", "ariza_teshisi", "yeniden_is_kapsami", "yontem_gelistirme", "birlestirme", "yetki_karari", "olcum", "raporlama", "arastirma", "isci_kosusu", "kapi_karari", "orvant_kayit"]},
     "sonuc": {"enum": ["ok", "ret", "hata", "zaman_asimi", "iptal", "bilinmiyor"]},
