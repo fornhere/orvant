@@ -233,10 +233,11 @@ def derive(state, root):
     report = core.inspect_state(state, root)
     views = {t['id']: t for t in report['tasks']}
     proposals, skipped = [], []
-    open_tasks = [t for t in state['tasks'] if t['status'] not in ('done', 'cancelled')
+    active_tasks = core._ontology().active_tasks(state['tasks'])
+    open_tasks = [t for t in active_tasks if t['status'] != 'done'
                   or views[t['id']]['effective_status'] == 'needs_review']
     covered = {key for t in open_tasks for key in t['object_ids']}
-    for task in sorted(state['tasks'], key=lambda t: t['id']):
+    for task in sorted(active_tasks, key=lambda t: t['id']):
         view = views[task['id']]
         if task['status'] == 'cancelled':
             continue
@@ -279,7 +280,7 @@ def derive(state, root):
         # the same scenario must not hide a contract without matching evidence.
         if any(obj['id'] in t['object_ids'] and set(criteria) <= set(t['acceptance'])
                and (t in open_tasks or views[t['id']]['effective_status'] == 'done')
-               for t in state['tasks']):
+               for t in active_tasks):
             continue
         p = _new_proposal(state, 'acceptance', [obj['id']], criteria,
                           {'object_id': obj['id'], 'object_sha256': _hash(obj),
@@ -403,7 +404,7 @@ def lanes(state, root, maximum=None):
         raise ValueError('--max must be positive')
     report = core.inspect_state(state, root)
     views = {t['id']: t for t in report['tasks']}
-    active = {t['id']: t for t in state['tasks'] if t['status'] not in ('done', 'cancelled')}
+    active = {t['id']: t for t in core._ontology().active_tasks(state['tasks']) if t['status'] != 'done'}
     code_context = _CodeContext(state)
     scopes = {key: _scope(state, task, code_context) for key, task in active.items()}
     adjacency = {key: set() for key in active}

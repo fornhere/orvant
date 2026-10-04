@@ -374,6 +374,11 @@ def _by_id(items):
     return {item["id"]: item for item in items}
 
 
+def active_tasks(tasks):
+    """Return task records that remain actionable or visible in live work views."""
+    return [task for task in tasks if task["status"] != "cancelled"]
+
+
 def _different_ids(before, after):
     # Canonical comparison distinguishes bool from int and detects changes
     # in arbitrary JSON values without depending on dictionary order.

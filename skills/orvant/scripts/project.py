@@ -183,6 +183,10 @@ def writer_lock(value: str):
 def load_project(root: Path, *, complete: bool = False) -> dict:
     folder = root / ".project"
     no_symlink(folder)
+    if folder.is_dir():
+        for entry in folder.rglob("*"):
+            if core.is_link(entry):
+                raise ValueError(f"Managed symlink conflict: {entry}")
     if not folder.is_dir():
         raise ValueError("Project is not initialized: .project directory missing or invalid")
     for entry in folder.rglob("*"):
@@ -194,7 +198,19 @@ def load_project(root: Path, *, complete: bool = False) -> dict:
     for relative in ("CONTEXT.md", "ONTOLOJİ.md", "integration.md", "scripts/ontology.py", "scripts/acceptance.py"):
         optional_file(folder / relative)
     state = read_json(folder / "state.json")
-    core.validate(state)
+    try:
+        core.validate(state)
+    except ValueError as error:
+        if "unknown history action" in str(error):
+            actions = sorted({entry.get("action") for entry in state.get("history", [])
+                              if isinstance(entry, dict) and isinstance(entry.get("action"), str)
+                              and entry["action"] not in core.ACTIONS})
+            raise ValueError(
+                "History/runtime incompatibility: " + ", ".join(actions) +
+                f". Runtime version {RUNTIME_VERSION} cannot read these actions; run the source skill "
+                "command `upgrade preview <root>`. A newer source runtime may be required."
+            ) from error
+        raise
     if complete and state["schema_version"] == 3:
         normal_file(folder / "scripts" / "ontology.py")
         normal_file(folder / "scripts" / "acceptance.py")
@@ -307,86 +323,138 @@ def write_new_bytes(path: Path, content: bytes) -> None:
         os.fsync(handle.fileno())
 
 
-def upgrade_command(args: argparse.Namespace) -> int:
-    """Replace runtime files, preserving state and permanent original backups.
+RUNTIME_VERSION = 2
 
-    One writer only. Each replacement is atomic, but the whole set is not: caught
-    installation errors trigger best-effort restoration. A process interruption
-    can require manual restoration from the reported backup directory.
-    """
-    root = root_path(args.root)
-    state = load_project(root)
+
+def _sha256(content: bytes | None) -> str | None:
+    return hashlib.sha256(content).hexdigest() if content is not None else None
+
+
+def _upgrade_plan(root: Path) -> tuple[dict, dict, dict[str, bytes], dict[str, bytes | None]]:
+    folder = root / ".project"
+    no_symlink(folder)
+    if folder.is_dir():
+        for entry in folder.rglob("*"):
+            if core.is_link(entry):
+                raise ValueError(f"Managed symlink conflict: {entry}")
+    normal_file(folder / "state.json")
+    raw_state = (folder / "state.json").read_bytes()
+    state = read_json(folder / "state.json")
     source = Path(os.path.abspath(__file__)).parent
     no_symlink(source)
-    destination = root / ".project" / "scripts"
-    names = RUNTIME_FILES
-    incoming = {}
-    previous = {}
-    for name in names:
+    if source.name == "scripts" and source.parent.name == ".project":
+        raise ValueError("Run upgrade from the source skill package, not a project's copied runtime")
+    destination = folder / "scripts"
+    incoming: dict[str, bytes] = {}
+    previous: dict[str, bytes | None] = {}
+    changes = []
+    for name in RUNTIME_FILES:
         normal_file(source / name)
         incoming[name] = (source / name).read_bytes()
         optional_file(destination / name)
         previous[name] = (destination / name).read_bytes() if (destination / name).exists() else None
-    common = {"root": str(root), "revision": state["revision"], "state_changed": False}
-    if incoming == previous:
-        emit({"ok": True, "result": "noop", "backup": None, **common})
-        return 0
-    if source.name == "scripts" and source.parent.name == ".project":
-        raise ValueError("Run upgrade from the source skill package, not a project's copied runtime")
+        if incoming[name] != previous[name]:
+            changes.append({"path": f"scripts/{name}", "old_sha256": _sha256(previous[name]),
+                            "new_sha256": _sha256(incoming[name])})
 
+    migrated, migrations, incompatible = core.migrate_history_actions(state)
+    if incompatible:
+        unique = sorted(set(incompatible))
+        error = ("Incompatible history actions: " + ", ".join(unique) +
+                 f". A runtime newer than version {RUNTIME_VERSION} is required; run upgrade preview "
+                 "with that source skill package.")
+        report = {"ok": False, "result": "incompatible_history", "root": str(root),
+                  "incompatible_history_actions": unique,
+                  "required_runtime_version": f">{RUNTIME_VERSION}", "error": error}
+        return report, state, incoming, previous
+
+    core.validate(migrated)
+    observations = {"runtime": {name: {"old": _sha256(previous[name]), "new": _sha256(incoming[name])}
+                                for name in RUNTIME_FILES},
+                    "state_sha256": _sha256(raw_state), "history_migrations": migrations}
+    digest = hashlib.sha256(json.dumps(observations, sort_keys=True,
+                                       separators=(",", ":")).encode()).hexdigest()
+    report = {"ok": True, "result": "upgrade_preview", "root": str(root),
+              "revision": migrated["revision"], "runtime_version": RUNTIME_VERSION,
+              "runtime_changes": changes, "history_migrations": migrations,
+              "incompatible_history_actions": [], "preview_digest": digest,
+              "state_changed": bool(migrations)}
+    return report, migrated, incoming, previous
+
+
+def upgrade_preview_command(args: argparse.Namespace) -> int:
+    report, _, _, _ = _upgrade_plan(root_path(args.root))
+    emit(report)
+    return 0 if report["ok"] else 1
+
+
+def upgrade_apply_command(args: argparse.Namespace) -> int:
+    """Apply exactly one preview under the writer lock, with permanent backup."""
+    root = root_path(args.root)
+    report, migrated, incoming, previous = _upgrade_plan(root)
+    if not report["ok"]:
+        emit(report)
+        return 1
+    if args.preview_digest != report["preview_digest"]:
+        raise ValueError("Upgrade preview digest mismatch; run upgrade preview again")
     folder = root / ".project"
+    state_path = folder / "state.json"
+    old_state = state_path.read_bytes()
+    if not report["runtime_changes"] and not report["history_migrations"]:
+        emit({**report, "result": "noop", "backup": None})
+        return 0
+
     backups = folder / "runtime-backups"
     no_symlink(backups)
     backups.mkdir(exist_ok=True)
     backup = Path(tempfile.mkdtemp(prefix="upgrade-", dir=backups))
-    stage = None
+    stage = Path(tempfile.mkdtemp(prefix=".runtime-stage-", dir=folder))
     replaced = []
+    state_replaced = False
     try:
-        # Preserve all originals before replacing any file. Never execute
-        # the target project's potentially obsolete runtime to read its data.
-        for name in names:
+        for name in RUNTIME_FILES:
             if previous[name] is not None:
                 write_new_bytes(backup / name, previous[name])
-        write_new(backup / "manifest.json", json_text({"files": {
-            name: {"previously_present": previous[name] is not None} for name in names}}))
-        write_new(backup / "README.txt",
-                  "Original runtime before upgrade. With no project writer running, "
-                  "restore BOTH core.py and project.py; for ontology.py and acceptance.py, "
-                  "restore each only if manifest.json says previously_present; otherwise remove it. "
-                  "Destination: ../../scripts/. "
-                  "state.json was not changed by this upgrade.\n")
-        stage = Path(tempfile.mkdtemp(prefix=".runtime-stage-", dir=folder))
-        for name in names:
             write_new_bytes(stage / name, incoming[name])
             if previous[name] is not None:
                 write_new_bytes(stage / (name + ".restore"), previous[name])
-        for name in names:
-            optional_file(destination / name)
-            os.replace(stage / name, destination / name)
+        write_new_bytes(backup / "state.json", old_state)
+        write_new(backup / "manifest.json", json_text({"files": {
+            name: {"previously_present": previous[name] is not None,
+                   "sha256": _sha256(previous[name])} for name in RUNTIME_FILES},
+            "state_sha256": _sha256(old_state)}))
+        write_new(backup / "README.txt", "Original runtime and state.json before upgrade.\n")
+        for name in RUNTIME_FILES:
+            optional_file(folder / "scripts" / name)
+            os.replace(stage / name, folder / "scripts" / name)
             replaced.append(name)
+        if report["history_migrations"]:
+            atomic_write(state_path, json_text(migrated))
+            state_replaced = True
     except (OSError, ValueError) as error:
         restore_errors = []
+        try:
+            if state_replaced:
+                atomic_write(state_path, old_state.decode("utf-8"))
+        except (OSError, ValueError) as restore_error:
+            restore_errors.append(f"state.json: {restore_error}")
         for name in reversed(replaced):
             try:
-                normal_file(destination / name)
+                target = folder / "scripts" / name
                 if previous[name] is None:
-                    (destination / name).unlink()
+                    target.unlink()
                 else:
-                    os.replace(stage / (name + ".restore"), destination / name)
+                    os.replace(stage / (name + ".restore"), target)
             except (OSError, ValueError) as restore_error:
                 restore_errors.append(f"{name}: {restore_error}")
-        emit({"ok": False, "result": "restore_failed" if restore_errors else "restored",
+        emit({**report, "ok": False, "result": "restore_failed" if restore_errors else "restored",
               "backup": str(backup), "error": str(error), "restore_errors": restore_errors,
-              "recovery": "Stop project writers and restore BOTH original runtime files, then restore "
-                          "or remove ontology.py and acceptance.py according to the backup manifest."
-                          if restore_errors else "Previous runtime preserved; retry upgrade after fixing the error.",
-              **common})
+              "recovery": "Restore BOTH state.json and all runtime files from the backup directory."
+                          if restore_errors else "Previous runtime and state preserved; retry after fixing the error."})
         return 1
     finally:
-        if stage is not None:
-            # Temporary cleanup must not obscure the runtime/rollback result.
-            shutil.rmtree(stage, ignore_errors=True)
-    emit({"ok": True, "result": "updated", "backup": str(backup), **common})
+        shutil.rmtree(stage, ignore_errors=True)
+    emit({**report, "result": "updated", "backup": str(backup)})
     return 0
 
 
@@ -408,11 +476,12 @@ def inspect_command(args: argparse.Namespace) -> int:
         view_warnings.append("CONTEXT.md is missing; live context is computed from state.json.")
     if view_warnings:
         report["view_warnings"] = view_warnings
-    if args.command == "check":
+    if args.command in {"check", "status"}:
         warnings = report.get("warnings", [])
         emit({"ok": not bool(warnings), "result": "checked", **report})
         return 1 if warnings else 0
     if args.json:
+        report["tasks"] = core._ontology().active_tasks(report["tasks"])
         emit(report)
     else:
         for warning in view_warnings:
@@ -428,6 +497,8 @@ def apply_command(args: argparse.Namespace) -> int:
     if state["revision"] != args.expected_revision:
         raise ValueError(f"Revision conflict: expected {args.expected_revision}, current {state['revision']}")
     event = read_json(Path(os.path.abspath(args.event)))
+    if event.get("action") in {"cancel_task", "supersede_task"} and not args.preview_digest:
+        raise ValueError("cancel_task/supersede_task require --preview-digest from preview")
     next_state = core.apply_event(state, event, root)
     core.validate(next_state)
     observed_digest = core.preview_digest(state, event, root, next_state)
@@ -509,17 +580,25 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("root")
     init.add_argument("--spec", required=True)
     init.add_argument("--evidence-dir", help="Schema-3 project-relative verification evidence directory")
-    upgrade = commands.add_parser("upgrade", help="Upgrade copied runtime from this source package; serialize writers")
-    upgrade.add_argument("root")
+    upgrade = commands.add_parser("upgrade", help="Preview or apply a copied-runtime upgrade")
+    upgrade_commands = upgrade.add_subparsers(dest="upgrade_command", required=True)
+    upgrade_preview = upgrade_commands.add_parser("preview", help="Show hashes and history migrations without writing")
+    upgrade_preview.add_argument("root")
+    upgrade_apply = upgrade_commands.add_parser("apply", help="Apply exactly a prior preview")
+    upgrade_apply.add_argument("root")
+    upgrade_apply.add_argument("--preview-digest", required=True)
     check = commands.add_parser("check", help="Validate structure and current evidence")
     check.add_argument("root")
+    status = commands.add_parser("status", help="Validate and report current project status")
+    status.add_argument("root")
     context = commands.add_parser("context", help="Read current context, recomputing evidence state")
     context.add_argument("root")
     context.add_argument("--json", action="store_true")
     ontology = commands.add_parser("ontology", help="Read ontology definitions and live object context")
     ontology.add_argument("root")
     ontology.add_argument("--json", action="store_true")
-    preview = commands.add_parser("preview", help="Validate an event and inspect its impact without writing")
+    preview = commands.add_parser(
+        "preview", help="Validate an event (including cancel_task/supersede_task) without writing")
     preview.add_argument("root")
     preview.add_argument("--event", required=True)
     preview.add_argument("--expected-revision", type=int, required=True)
@@ -550,10 +629,13 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8")
     args = parser().parse_args(argv)
     try:
-        if args.command in {"init", "apply", "upgrade"}:
+        if args.command in {"init", "apply"} or (args.command == "upgrade" and args.upgrade_command == "apply"):
             with writer_lock(args.root):
-                return {"init": initialize, "apply": apply_command,
-                        "upgrade": upgrade_command}[args.command](args)
+                if args.command == "upgrade":
+                    return upgrade_apply_command(args)
+                return {"init": initialize, "apply": apply_command}[args.command](args)
+        if args.command == "upgrade":
+            return upgrade_preview_command(args)
         if args.command == "graph":
             import graph
             return graph.command(args)

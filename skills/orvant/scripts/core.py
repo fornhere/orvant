@@ -30,14 +30,42 @@ ACTIONS = {
 LEGACY_ACTIONS = frozenset(ACTIONS)
 ACTIONS.update({"extend_model": {"objects", "relations", "tasks"},
                 "revise_task": {"task_id", "definition"},
+                "cancel_task": {"task_id", "allow_done"},
+                "supersede_task": {"task_id", "replacement_task_id", "allow_done"},
                 "migrate_ontology": {"ontology", "objects", "relations", "bindings"},
                 "mutate_graph": {"operations"},
                 "sync_code_graph": {"operations"},
                 "set_evidence_dir": {"evidence_dir"}})
+HISTORY_ACTION_ALIASES = {
+    "task_started": "start_task", "evidence_submitted": "submit_evidence",
+    "task_completed": "complete_task", "task_reopened": "reopen_task",
+    "decision_proposed": "propose_decision", "decision_accepted": "accept_decision",
+    "decision_rejected": "reject_decision", "task_reconciled": "reconcile_task",
+}
 DEFINITION_FIELDS = {"title", "object_ids", "depends_on", "decision_ids", "acceptance"}
 DOMAIN_TASK_FIELDS = {"input_ids", "output_ids", "input_snapshot", "generation", "review_reasons"}
 OPTIONAL_DOMAIN_TASK_FIELDS = {"input_fields", "run_snapshot", "output_snapshot", "support_groups",
                                "support_snapshot", "acceptance_rules"}
+
+
+def migrate_history_actions(state):
+    """Return a copied state, explicit alias migrations, and unknown action names."""
+    migrated = copy.deepcopy(state)
+    events = []
+    unknown = []
+    history = migrated.get("history")
+    if not isinstance(history, list):
+        return migrated, events, unknown
+    for entry in history:
+        action = entry.get("action") if isinstance(entry, dict) else None
+        if action in HISTORY_ACTION_ALIASES:
+            replacement = HISTORY_ACTION_ALIASES[action]
+            events.append({"revision": entry.get("revision"), "old_action": action,
+                           "new_action": replacement})
+            entry["action"] = replacement
+        elif isinstance(action, str) and action not in ACTIONS:
+            unknown.append(action)
+    return migrated, events, sorted(set(unknown))
 
 
 
@@ -318,7 +346,8 @@ def _evidence_directory(value):
 
 def _validate_task(state, task, objects, tasks, decisions):
     _shape(task, {"id", "title", "status", "object_ids", "depends_on", "decision_ids",
-                  "acceptance", "evidence"} | (DOMAIN_TASK_FIELDS | (set(task) & OPTIONAL_DOMAIN_TASK_FIELDS)
+                  "acceptance", "evidence"} | ({"superseded_by"} if "superseded_by" in task else set()) |
+                 (DOMAIN_TASK_FIELDS | (set(task) & OPTIONAL_DOMAIN_TASK_FIELDS)
                                              if state["schema_version"] == 3 else set()), "task")
     _text(task["title"], "task.title")
     _text(task["status"], "task.status")
@@ -328,6 +357,11 @@ def _validate_task(state, task, objects, tasks, decisions):
         _strings(task[field], f"task.{field}", unique=True)
         _require(all(key in lookup for key in task[field]), f"task.{field}: unknown reference")
     _require(task["id"] not in task["depends_on"], "self dependency")
+    if "superseded_by" in task:
+        _text(task["superseded_by"], "task.superseded_by")
+        _require(task["status"] == "cancelled", "superseded task must be cancelled")
+        _require(task["superseded_by"] in tasks and task["superseded_by"] != task["id"],
+                 "invalid superseded_by reference")
     _require(all(decisions[key]["status"] in {"accepted", "superseded"}
                  for key in task["decision_ids"]), "task must link accepted decision history")
     if state["schema_version"] == 3:
@@ -474,6 +508,8 @@ def _validate_data(state):
     for task in tasks.values():
         _validate_task(state, task, objects, tasks, decisions)
     _acyclic({key: task["depends_on"] for key, task in tasks.items()}, "task dependencies")
+    _acyclic({key: ([task["superseded_by"]] if "superseded_by" in task else [])
+              for key, task in tasks.items()}, "task supersession")
     _task_dependencies(state)
     if state["schema_version"] == 3:
         # Optional supports are not unconditional prerequisites, but may not
@@ -730,7 +766,7 @@ def render_context(state, root):
                   f"  Gerekçe: {decision['rationale']}; kaynak: {decision['source'] or 'belirtilmedi'}; "
                   f"kabul eden: {decision['accepted_by'] or 'henüz kabul edilmedi'}"]
     lines += ["", "## Görevler", ""]
-    for task in report["tasks"]:
+    for task in _ontology().active_tasks(report["tasks"]):
         lines += [f"- {task['id']} [{task['effective_status']}] {task['title']} "
                   f"(kayıt: {task['status']})"]
         lines += [f"  - Ölçüt: {criterion}" for criterion in task["acceptance"]]
@@ -1154,6 +1190,25 @@ def apply_event(state, event, root):
         _require(task["status"] in {"done", "review", "doing"}, "cannot reopen task from this status")
         _clear_acceptance(task, "task reopened", status="todo")
         invalidate_dependents()
+    elif action in {"cancel_task", "supersede_task"}:
+        _require(type(event["allow_done"]) is bool, "allow_done must be boolean")
+        effective = next(item["effective_status"] for item in inspect_state(state, root)["tasks"]
+                         if item["id"] == task["id"])
+        _require(effective in {"todo", "blocked", "needs_review", "review", "done"},
+                 "cancel_task requires todo/blocked/needs_review/review or done")
+        _require(task["status"] != "done" or event["allow_done"],
+                 "cancelling done task requires allow_done=true")
+        before = copy.deepcopy(task)
+        task["status"] = "cancelled"
+        if action == "supersede_task":
+            _text(event["replacement_task_id"], "event.replacement_task_id")
+            _require(event["replacement_task_id"] in tasks, "unknown replacement_task_id")
+            _require(event["replacement_task_id"] != task["id"], "task cannot supersede itself")
+            task["superseded_by"] = event["replacement_task_id"]
+        invalidate_dependents()
+        change = {"before": before, "after": copy.deepcopy(task)}
+        if state["schema_version"] == 1:
+            new["schema_version"] = 2
     elif action == "propose_decision":
         proposal = event["decision"]
         _shape(proposal, {"id", "topic", "statement", "rationale", "source", "supersedes"}, "proposal")
