@@ -366,6 +366,15 @@ def gizli_esikler(betik, iddialar):
             return [deger]
         if isinstance(t, ast.UnaryOp) and isinstance(t.op, (ast.USub, ast.UAdd)):
             return [-v if isinstance(t.op, ast.USub) else v for v in sayilar(t.operand, kapsam)]
+        if (isinstance(t, ast.Call) and _cagri_adi(t) == "round" and 1 <= len(t.args) <= 2
+                and not t.keywords):
+            basamak = 0 if len(t.args) == 1 else _sayi(t.args[1])
+            if type(basamak) is int:
+                return [round(v, basamak) for v in sayilar(t.args[0], kapsam)]
+        if isinstance(t, ast.BinOp) and isinstance(t.op, ast.Mult):
+            sol, sag = sayilar(t.left, kapsam), sayilar(t.right, kapsam)
+            if sol and sag:
+                return list(dict.fromkeys(a * b for a in sol for b in sag))
         adaylar = (oznitelikler.get(t.attr) if isinstance(t, ast.Attribute) else None) or []
         if isinstance(t, ast.Name):
             adaylar = [v for _, v in (ad_atamalari(t.id, kapsam)[1] or [])]
@@ -385,7 +394,16 @@ def gizli_esikler(betik, iddialar):
         return ((isinstance(ic, ast.BinOp) and isinstance(ic.op, islec))
                 or (isinstance(ic, ast.Call) and isinstance(ic.func, ast.Attribute) and ic.func.attr == yontem))
 
+    ada_onbellek, olcek_onbellek = {}, {}
+
     def ada_bagli(t, kapsam, oranli, konum, goruldu):
+        """Aynı ad zincirini kök ifade ve ölçek aramaları arasında yeniden çözme (G-158)."""
+        anahtar = (id(t), id(kapsam), oranli, konum, goruldu)
+        if anahtar not in ada_onbellek:
+            ada_onbellek[anahtar] = _ada_bagli(t, kapsam, oranli, konum, goruldu)
+        return ada_onbellek[anahtar]
+
+    def _ada_bagli(t, kapsam, oranli, konum, goruldu):
         """Adın benzerlik ifadesi olan bağlaması ve ölçeği. Aynı kapsamda kullanımdan önceki en son benzerlik
         bağlaması (G-155: `o = o * 100` ölçeği değiştirir); önceki yoksa ilk benzerlik bağlaması."""
         if (t.id, konum) in goruldu or (k := cozum(t.id, kapsam)) is None:
@@ -405,6 +423,12 @@ def gizli_esikler(betik, iddialar):
         return None
 
     def olcek(t, kapsam, oranli, konum=None, goruldu=()):
+        anahtar = (id(t), id(kapsam), oranli, konum, goruldu)
+        if anahtar not in olcek_onbellek:
+            olcek_onbellek[anahtar] = _olcek(t, kapsam, oranli, konum, goruldu)
+        return olcek_onbellek[anahtar]
+
+    def _olcek(t, kapsam, oranli, konum=None, goruldu=()):
         """Benzerlik ifadesinin ölçeği (oran 1, yüzde 100); benzerlik değilse None."""
         if isinstance(t, ast.Name):
             bulgu = ada_bagli(t, kapsam, oranli, konum, goruldu)
