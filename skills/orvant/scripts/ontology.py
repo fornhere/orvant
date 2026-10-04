@@ -12,6 +12,9 @@ execution here. Callers own revision checks, transactions, and file access.
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 import copy
 import hashlib
 import json
@@ -21,6 +24,70 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 PROPERTY_TYPES = {"string", "integer", "number", "boolean", "string_list", "file", "json"}
 IMPACT_DIRECTIONS = {"forward", "reverse", "both", "none"}
+
+
+# Caches live only inside one synchronous analysis/transition. Mutable graph
+# transactions explicitly invalidate them; public calls never retain old state.
+_ANALYSIS = ContextVar("ontology_analysis", default=None)
+
+
+@contextmanager
+def analysis_scope():
+    if _ANALYSIS.get() is not None:
+        yield
+        return
+    token = _ANALYSIS.set({"graphs": {}, "dependencies": {}, "files": {}, "objects": {}})
+    try:
+        yield
+    finally:
+        _ANALYSIS.reset(token)
+
+
+def analyzed(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        with analysis_scope():
+            return function(*args, **kwargs)
+    return run
+
+
+def invalidate(state):
+    cache = _ANALYSIS.get()
+    if cache is not None:
+        cache["graphs"].pop(id(state), None)
+        cache["dependencies"].clear()
+
+
+def _analysis_graph(state):
+    cache = _ANALYSIS.get()
+    if cache is None or type(state) is not dict or not all(
+            key in state for key in ("ontology", "objects", "relations")):
+        return None
+    key = id(state)
+    refs = (state["ontology"], state["objects"], state["relations"])
+    entry = cache["graphs"].get(key)
+    if entry is None or any(a is not b for a, b in zip(entry["refs"], refs)):
+        entry = {"state": state, "refs": refs, "validated": False}
+        cache["graphs"][key] = entry
+    return entry
+
+
+def _graph_index(state):
+    entry = _analysis_graph(state)
+    if entry is not None and "index" in entry:
+        return entry["index"]
+    objects = _by_id(state["objects"])
+    relations = _by_id(state["relations"])
+    incoming, incoming_relations = {}, {}
+    arcs = list(_arcs(state))
+    for source, dependent, relation_id in arcs:
+        incoming.setdefault(dependent, set()).add(source)
+        incoming_relations.setdefault(dependent, set()).add(relation_id)
+    index = {"objects": objects, "relations": relations, "incoming": incoming,
+             "incoming_relations": incoming_relations, "closures": {}}
+    if entry is not None:
+        entry["index"] = index
+    return index
 
 
 def _require(condition, message):
@@ -40,6 +107,19 @@ def _text(value, label):
 def _canonical(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
                       allow_nan=False)
+
+
+
+def _plain_json(value):
+    """Canonical JSON must never alias tuples or subclasses in Python callers."""
+    kind = type(value)
+    if value is None or kind in (str, bool, int, float):
+        return True
+    if kind is list:
+        return all(_plain_json(item) for item in value)
+    if kind is dict:
+        return all(type(key) is str and _plain_json(item) for key, item in value.items())
+    return False
 
 
 def _json_value(value, label):
@@ -155,7 +235,20 @@ def _validate_graph(state):
         _text(definition["impact"], f"{label}.impact")
         _require(definition["impact"] in IMPACT_DIRECTIONS, f"{label}: unknown impact direction")
 
+    analysis = _ANALYSIS.get()
     for object_id, obj in objects.items():
+        # Only successfully checked, byte-canonical records can be reused.
+        # A changed type contract invalidates every instance of that type.
+        record_key = None
+        if analysis is not None and type(obj.get("type")) is str and obj["type"] in object_types:
+            try:
+                definition = object_types[obj["type"]]
+                if _plain_json(obj) and _plain_json(definition):
+                    record_key = (_canonical(obj), _canonical(definition))
+            except (TypeError, ValueError, OverflowError, RecursionError):
+                record_key = None
+            if record_key is not None and record_key in analysis["objects"]:
+                continue
         label = f"object {object_id}"
         _shape(obj, {"id", "type", "label", "properties"}, label)
         _text(obj["type"], f"{label}.type")
@@ -174,6 +267,8 @@ def _validate_graph(state):
             if definition["enum"] is not None:
                 allowed = {_canonical(choice) for choice in definition["enum"]}
                 _require(_canonical(value) in allowed, f"{label}.{name}: value outside enum")
+        if record_key is not None:
+            analysis["objects"][record_key] = True
 
     counts = {type_id: {"from": {}, "to": {}} for type_id in relation_types}
     triples = set()
@@ -218,7 +313,12 @@ object; ``to_min/max`` count incoming instances for EACH target object. Object
 graph cycles and self-relations are permitted when endpoint types allow them.
 """
     try:
+        entry = _analysis_graph(state)
+        if entry is not None and entry["validated"]:
+            return
         _validate_graph(state)
+        if entry is not None:
+            entry["validated"] = True
     except (TypeError, KeyError, AttributeError, RecursionError, OverflowError) as exc:
         raise ValueError(f"malformed ontology graph: {exc}") from exc
 
@@ -236,7 +336,7 @@ def _arcs(state):
 
 def _input_ids(state, input_ids):
     _require(isinstance(input_ids, (list, tuple, set, frozenset)), "input_ids: expected collection")
-    available = {obj["id"] for obj in state["objects"]}
+    available = _graph_index(state)["objects"]
     result = set()
     for object_id in input_ids:
         _text(object_id, "input_ids")
@@ -246,9 +346,11 @@ def _input_ids(state, input_ids):
 
 
 def _upstream(state, inputs):
-    incoming = {}
-    for source, dependent, _ in _arcs(state):
-        incoming.setdefault(dependent, set()).add(source)
+    index = _graph_index(state)
+    key = frozenset(inputs)
+    if key in index["closures"]:
+        return set(index["closures"][key])
+    incoming = index["incoming"]
     visited = set(inputs)
     queue = deque(sorted(inputs))
     while queue:
@@ -257,9 +359,11 @@ def _upstream(state, inputs):
             if source not in visited:
                 visited.add(source)
                 queue.append(source)
+    index["closures"][key] = frozenset(visited)
     return visited
 
 
+@analyzed
 def upstream(state, input_ids):
     """Return bound inputs and all declared upstream dependencies, cycle-safe."""
     validate_graph(state)
@@ -278,6 +382,7 @@ def _different_ids(before, after):
                   or _canonical(before[key]) != _canonical(after[key]))
 
 
+@analyzed
 def impact(before, after):
     """Explain conservative change impact over the union of old and new arcs.
 
@@ -338,6 +443,7 @@ to explain why an object needs review; it is not an exhaustive proof graph.
             "affected_objects": sorted(paths), "paths": dict(sorted(paths.items()))}
 
 
+@analyzed
 def snapshot(state, input_ids, root, hash_file, projections=None, *, direct=False):
     """Hash the bound inputs, upstream graph, applicable schema and file content.
 
@@ -355,8 +461,8 @@ raise rather than silently return a fingerprint for incomplete evidence.
     inputs = _input_ids(state, input_ids)
     included = set(inputs) if direct else _upstream(state, inputs)
     object_types = _by_id(state["ontology"]["object_types"])
-    objects = [copy.deepcopy(obj) for obj in sorted(state["objects"], key=lambda item: item["id"])
-               if obj["id"] in included]
+    index = _graph_index(state)
+    objects = [dict(index["objects"][key]) for key in sorted(included)]
     projections = projections or {}
     selected_by_type = {}
     for obj in objects:
@@ -366,8 +472,8 @@ raise rather than silently return a fingerprint for incomplete evidence.
                                  if key in projections[obj["id"]]}
         selected_by_type.setdefault(obj["type"], set()).update(obj["properties"])
     included_types = {obj["type"] for obj in objects}
-    included_relations = {relation_id for _, dependent, relation_id in _arcs(state)
-                          if dependent in included}
+    included_relations = {relation_id for dependent in included
+                          for relation_id in index["incoming_relations"].get(dependent, ())}
     files = []
     for obj in objects:
         definitions = object_types[obj["type"]]["properties"]
@@ -388,14 +494,13 @@ raise rather than silently return a fingerprint for incomplete evidence.
                            if definition["impact"] != "none"
                            and (definition["from_type"] in included_types
                                 or definition["to_type"] in included_types)],
-        "relations": [relation for relation in
-                      sorted(state["relations"], key=lambda item: item["id"])
-                      if relation["id"] in included_relations],
+        "relations": [index["relations"][key] for key in sorted(included_relations)],
         "files": files,
     }
     return copy.deepcopy(payload)
 
 
+@analyzed
 def fingerprint(state, input_ids, root, hash_file):
     """Compact digest of the inspectable dependency manifest."""
     return hashlib.sha256(_canonical(snapshot(state, input_ids, root, hash_file)).encode("utf-8")).hexdigest()

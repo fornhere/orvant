@@ -24,7 +24,7 @@ import core
 
 
 REQUIRED = ("state.json", "CONTEXT.md", "integration.md", "scripts/project.py", "scripts/core.py")
-RUNTIME_FILES = ("core.py", "project.py", "ontology.py", "acceptance.py")
+RUNTIME_FILES = ("core.py", "project.py", "ontology.py", "acceptance.py", "graph.py", "derive.py")
 INTEGRATION = """# Proje çalışma kaydı
 
 Bu projeye devam ederken önce `.project/state.json` dosyasını oku.
@@ -240,6 +240,10 @@ def initialize(args: argparse.Namespace) -> int:
         return 0
 
     spec = read_json(Path(os.path.abspath(args.spec)))
+    if getattr(args, "evidence_dir", None) is not None:
+        if spec["schema_version"] != 3:
+            raise ValueError("evidence_dir requires schema 3")
+        spec["project"]["evidence_dir"] = args.evidence_dir
     core.validate(spec)
     if spec["schema_version"] not in (1, 2, 3) or spec["revision"] != 0 or spec["history"] != []:
         raise ValueError("Initial spec requires schema_version=1, 2 or 3, revision=0, history=[]")
@@ -386,6 +390,7 @@ def upgrade_command(args: argparse.Namespace) -> int:
     return 0
 
 
+@core.analyzed
 def inspect_command(args: argparse.Namespace) -> int:
     root = root_path(args.root)
     state = load_project(root)
@@ -416,6 +421,7 @@ def inspect_command(args: argparse.Namespace) -> int:
     return 0
 
 
+@core.analyzed
 def apply_command(args: argparse.Namespace) -> int:
     root = root_path(args.root)
     state = load_project(root)
@@ -459,6 +465,7 @@ def apply_command(args: argparse.Namespace) -> int:
     return 0
 
 
+@core.analyzed
 def preview_command(args: argparse.Namespace) -> int:
     root = root_path(args.root)
     state = load_project(root)
@@ -471,12 +478,37 @@ def preview_command(args: argparse.Namespace) -> int:
     return 0
 
 
+@core.analyzed
+def work_command(args: argparse.Namespace) -> int:
+    import derive
+    root = root_path(args.root)
+    state = load_project(root)
+    report = (derive.derive(state, root) if args.command == "derive" else
+              derive.lanes(state, root, args.max))
+    if args.out:
+        output = Path(os.path.abspath(args.out))
+        no_symlink(output)
+        managed = root / ".project"
+        if output == managed or managed in output.parents:
+            raise ValueError("Output must be outside managed .project records")
+        # An export must never overwrite a source, evidence, or another input.
+        protected = {root / item["path"] for task in state["tasks"] for item in task["evidence"]}
+        protected.update(root / path for obj in state["objects"] for path in derive._paths(state, obj))
+        protected.add(Path(__file__).resolve())
+        if output in protected:
+            raise ValueError("Output conflicts with a project source or evidence")
+        atomic_write(output, json_text(report))
+    emit(report)
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Initialize from a v1/v2/v3 spec; preserve existing records")
     init.add_argument("root")
     init.add_argument("--spec", required=True)
+    init.add_argument("--evidence-dir", help="Schema-3 project-relative verification evidence directory")
     upgrade = commands.add_parser("upgrade", help="Upgrade copied runtime from this source package; serialize writers")
     upgrade.add_argument("root")
     check = commands.add_parser("check", help="Validate structure and current evidence")
@@ -496,6 +528,18 @@ def parser() -> argparse.ArgumentParser:
     apply.add_argument("--event", required=True)
     apply.add_argument("--expected-revision", type=int, required=True)
     apply.add_argument("--preview-digest", help="Require the exact state/event/file observations from preview")
+    graph = commands.add_parser("graph", help="Extract deterministic code graph event")
+    graph.add_argument("root")
+    graph.add_argument("--out", required=True)
+    graph.add_argument("--include", action="append", default=[])
+    graph.add_argument("--exclude", action="append", default=[])
+    graph.add_argument("--max-files", type=int, default=10000)
+    for name in ("derive", "lanes"):
+        work = commands.add_parser(name, help="Read-only work proposals or parallel lanes")
+        work.add_argument("root")
+        work.add_argument("--out", help="Export JSON outside managed project records")
+        if name == "lanes":
+            work.add_argument("--max", type=int, help="Maximum active lanes; excess components queue")
     return result
 
 
@@ -510,6 +554,11 @@ def main(argv: list[str] | None = None) -> int:
             with writer_lock(args.root):
                 return {"init": initialize, "apply": apply_command,
                         "upgrade": upgrade_command}[args.command](args)
+        if args.command == "graph":
+            import graph
+            return graph.command(args)
+        if args.command in {"derive", "lanes"}:
+            return work_command(args)
         if args.command == "preview":
             return preview_command(args)
         return inspect_command(args)

@@ -9,7 +9,9 @@ import copy
 import hashlib
 import json
 import math
+import os
 import stat
+from functools import wraps
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
@@ -29,11 +31,22 @@ LEGACY_ACTIONS = frozenset(ACTIONS)
 ACTIONS.update({"extend_model": {"objects", "relations", "tasks"},
                 "revise_task": {"task_id", "definition"},
                 "migrate_ontology": {"ontology", "objects", "relations", "bindings"},
-                "mutate_graph": {"operations"}})
+                "mutate_graph": {"operations"},
+                "sync_code_graph": {"operations"},
+                "set_evidence_dir": {"evidence_dir"}})
 DEFINITION_FIELDS = {"title", "object_ids", "depends_on", "decision_ids", "acceptance"}
 DOMAIN_TASK_FIELDS = {"input_ids", "output_ids", "input_snapshot", "generation", "review_reasons"}
 OPTIONAL_DOMAIN_TASK_FIELDS = {"input_fields", "run_snapshot", "output_snapshot", "support_groups",
                                "support_snapshot", "acceptance_rules"}
+
+
+
+def analyzed(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        with _ontology().analysis_scope():
+            return function(*args, **kwargs)
+    return run
 
 
 def _ontology():
@@ -51,7 +64,7 @@ def _definition_fields(state):
     return DEFINITION_FIELDS | ({"input_ids", "output_ids"} if state["schema_version"] == 3 else set())
 
 
-def _task_dependencies(state):
+def _compute_task_dependencies(state):
     """Explicit workflow prerequisites plus declared input producers."""
     result = {t["id"]: list(t["depends_on"]) for t in state["tasks"]}
     reasons = {t["id"]: [] for t in state["tasks"]}
@@ -73,6 +86,19 @@ def _task_dependencies(state):
                 reasons[task["id"]].append({"task_id": producer, "object_id": obj})
     _acyclic(result, "effective task dependencies")
     return result, reasons
+
+
+
+def _task_dependencies(state):
+    cache = _ontology()._ANALYSIS.get()
+    if cache is None or state["schema_version"] != 3:
+        return _compute_task_dependencies(state)
+    key = (id(state), tuple((t["id"], tuple(t["depends_on"]),
+                            tuple(t["input_ids"]), tuple(t["output_ids"])) for t in state["tasks"]))
+    if key not in cache["dependencies"]:
+        cache["dependencies"][key] = _compute_task_dependencies(state)
+    dependencies, reasons = cache["dependencies"][key]
+    return {k: list(v) for k, v in dependencies.items()}, copy.deepcopy(reasons)
 
 
 def _input_snapshot(state, task, root):
@@ -157,10 +183,10 @@ def _refresh_supports(state, root):
             seeds.add(task["id"])
             _clear_acceptance(task, "approved support requirements lost; explicit new review required")
     dependencies, _ = _task_dependencies(state)
-    pending = list(seeds)
+    pending = sorted(seeds)
     while pending:
         parent = pending.pop()
-        for task in state["tasks"]:
+        for task in sorted(state["tasks"], key=lambda item: item["id"]):
             key = task["id"]
             if key not in seeds and parent in dependencies[key]:
                 seeds.add(key)
@@ -269,6 +295,84 @@ def _relative_path(value):
     return posix
 
 
+def _evidence_directory(value):
+    path = _relative_path(value)
+    _require(".git" not in {part.casefold() for part in path.parts},
+             "project.evidence_dir: git path forbidden")
+    return path
+
+
+def _validate_task(state, task, objects, tasks, decisions):
+    _shape(task, {"id", "title", "status", "object_ids", "depends_on", "decision_ids",
+                  "acceptance", "evidence"} | (DOMAIN_TASK_FIELDS | (set(task) & OPTIONAL_DOMAIN_TASK_FIELDS)
+                                             if state["schema_version"] == 3 else set()), "task")
+    _text(task["title"], "task.title")
+    _text(task["status"], "task.status")
+    _require(task["status"] in TASK_STATUSES, "invalid task status")
+    for field, lookup in (("object_ids", objects), ("depends_on", tasks),
+                          ("decision_ids", decisions)):
+        _strings(task[field], f"task.{field}", unique=True)
+        _require(all(key in lookup for key in task[field]), f"task.{field}: unknown reference")
+    _require(task["id"] not in task["depends_on"], "self dependency")
+    _require(all(decisions[key]["status"] in {"accepted", "superseded"}
+                 for key in task["decision_ids"]), "task must link accepted decision history")
+    if state["schema_version"] == 3:
+        for field in ("input_ids", "output_ids"):
+            _strings(task[field], f"task.{field}", unique=True)
+            _require(set(task[field]) <= set(task["object_ids"]), f"task.{field}: must be included in object_ids")
+        _require(not set(task["input_ids"]) & set(task["output_ids"]), "task inputs and outputs overlap")
+        _integer(task["generation"], "task.generation")
+        _strings(task["review_reasons"], "task.review_reasons")
+        snap = task["input_snapshot"]
+        if snap is not None:
+            _shape(snap, {"sha256", "manifest"}, "input snapshot")
+            _shape(snap["manifest"], {"graph", "producer_generations", "contract"}, "snapshot manifest")
+            _require(type(snap["manifest"]["graph"]) is dict and type(snap["manifest"]["producer_generations"]) is dict,
+                     "invalid snapshot graph or generations")
+            _json_value(snap["manifest"], "snapshot manifest")
+            _require(snap["sha256"] == _manifest_hash(snap["manifest"]), "invalid input snapshot hash")
+        for field in ("run_snapshot", "output_snapshot"):
+            stored = task.get(field)
+            if stored is not None:
+                _shape(stored, {"sha256", "manifest"}, f"task.{field}")
+                _json_value(stored["manifest"], f"task.{field}.manifest")
+                _require(stored["sha256"] == _manifest_hash(stored["manifest"]), f"invalid {field} hash")
+        if "input_fields" in task:
+            _require(type(task["input_fields"]) is dict, "input_fields must be object")
+            closure = _ontology().upstream(state, task["input_ids"])
+            for obj, fields in task["input_fields"].items():
+                _require(obj in closure, "projection object not in input closure")
+                _strings(fields, "input projection fields", unique=True)
+                definition = next(d for d in state["ontology"]["object_types"] if d["id"] == objects[obj]["type"])
+                _require(set(fields) <= set(definition["properties"]), "unknown projected property")
+        if task.get("support_groups") or task.get("acceptance_rules"):
+            _acceptance().validate_contract(task, state)
+        if task["status"] == "done":
+            _require(snap is not None and task["generation"] > 0, "done task requires input snapshot and generation")
+    _strings(task["acceptance"], "task.acceptance")
+    _require(bool(task["acceptance"]), "task requires acceptance criteria")
+    _list(task["evidence"], "task.evidence")
+    seen_evidence = set()
+    for evidence in task["evidence"]:
+        _shape(evidence, {"path", "sha256", "criterion", "note", "reviewer"}, "evidence")
+        _relative_path(evidence["path"])
+        _text(evidence["sha256"], "evidence.sha256")
+        _require(len(evidence["sha256"]) == 64
+                 and all(c in "0123456789abcdef" for c in evidence["sha256"]),
+                 "evidence.sha256: expected lowercase SHA-256")
+        _integer(evidence["criterion"], "evidence.criterion")
+        _require(evidence["criterion"] < len(task["acceptance"]),
+                 "evidence criterion out of range")
+        _text(evidence["note"], "evidence.note")
+        _text(evidence["reviewer"], "evidence.reviewer")
+        pair = (evidence["path"], evidence["criterion"])
+        _require(pair not in seen_evidence, "duplicate evidence for criterion/path")
+        seen_evidence.add(pair)
+    if task["status"] == "done":
+        _require({e["criterion"] for e in task["evidence"]}
+                 == set(range(len(task["acceptance"]))), "done task requires every criterion")
+
+
 def _validate_data(state):
     _require(type(state) is dict, "state: expected object")
     _shape(state, {"schema_version", "revision", "project", "objects", "relations",
@@ -278,7 +382,11 @@ def _validate_data(state):
     _integer(state["revision"], "revision")
     project = state["project"]
     _shape(project, {"id", "name", "goal", "audience", "scope", "out_of_scope",
-                     "constraints", "open_questions"}, "project")
+                     "constraints", "open_questions"} |
+           ({"evidence_dir"} if state["schema_version"] == 3 and "evidence_dir" in project else set()),
+           "project")
+    if "evidence_dir" in project:
+        _evidence_directory(project["evidence_dir"])
     for key in ("id", "name", "goal", "audience"):
         _text(project[key], f"project.{key}")
     for key in ("scope", "out_of_scope", "constraints", "open_questions"):
@@ -348,74 +456,7 @@ def _validate_data(state):
             _require(len(successors) == 1, "superseded decision needs one accepted successor")
 
     for task in tasks.values():
-        _shape(task, {"id", "title", "status", "object_ids", "depends_on", "decision_ids",
-                      "acceptance", "evidence"} | (DOMAIN_TASK_FIELDS | (set(task) & OPTIONAL_DOMAIN_TASK_FIELDS)
-                                                 if state["schema_version"] == 3 else set()), "task")
-        _text(task["title"], "task.title")
-        _text(task["status"], "task.status")
-        _require(task["status"] in TASK_STATUSES, "invalid task status")
-        for field, lookup in (("object_ids", objects), ("depends_on", tasks),
-                              ("decision_ids", decisions)):
-            _strings(task[field], f"task.{field}", unique=True)
-            _require(all(key in lookup for key in task[field]), f"task.{field}: unknown reference")
-        _require(task["id"] not in task["depends_on"], "self dependency")
-        _require(all(decisions[key]["status"] in {"accepted", "superseded"}
-                     for key in task["decision_ids"]), "task must link accepted decision history")
-        if state["schema_version"] == 3:
-            for field in ("input_ids", "output_ids"):
-                _strings(task[field], f"task.{field}", unique=True)
-                _require(set(task[field]) <= set(task["object_ids"]), f"task.{field}: must be included in object_ids")
-            _require(not set(task["input_ids"]) & set(task["output_ids"]), "task inputs and outputs overlap")
-            _integer(task["generation"], "task.generation")
-            _strings(task["review_reasons"], "task.review_reasons")
-            snap = task["input_snapshot"]
-            if snap is not None:
-                _shape(snap, {"sha256", "manifest"}, "input snapshot")
-                _shape(snap["manifest"], {"graph", "producer_generations", "contract"}, "snapshot manifest")
-                _require(type(snap["manifest"]["graph"]) is dict and type(snap["manifest"]["producer_generations"]) is dict,
-                         "invalid snapshot graph or generations")
-                _json_value(snap["manifest"], "snapshot manifest")
-                _require(snap["sha256"] == _manifest_hash(snap["manifest"]), "invalid input snapshot hash")
-            for field in ("run_snapshot", "output_snapshot"):
-                stored = task.get(field)
-                if stored is not None:
-                    _shape(stored, {"sha256", "manifest"}, f"task.{field}")
-                    _json_value(stored["manifest"], f"task.{field}.manifest")
-                    _require(stored["sha256"] == _manifest_hash(stored["manifest"]), f"invalid {field} hash")
-            if "input_fields" in task:
-                _require(type(task["input_fields"]) is dict, "input_fields must be object")
-                closure = _ontology().upstream(state, task["input_ids"])
-                for obj, fields in task["input_fields"].items():
-                    _require(obj in closure, "projection object not in input closure")
-                    _strings(fields, "input projection fields", unique=True)
-                    definition = next(d for d in state["ontology"]["object_types"] if d["id"] == objects[obj]["type"])
-                    _require(set(fields) <= set(definition["properties"]), "unknown projected property")
-            if task.get("support_groups") or task.get("acceptance_rules"):
-                _acceptance().validate_contract(task, state)
-            if task["status"] == "done":
-                _require(snap is not None and task["generation"] > 0, "done task requires input snapshot and generation")
-        _strings(task["acceptance"], "task.acceptance")
-        _require(bool(task["acceptance"]), "task requires acceptance criteria")
-        _list(task["evidence"], "task.evidence")
-        seen_evidence = set()
-        for evidence in task["evidence"]:
-            _shape(evidence, {"path", "sha256", "criterion", "note", "reviewer"}, "evidence")
-            _relative_path(evidence["path"])
-            _text(evidence["sha256"], "evidence.sha256")
-            _require(len(evidence["sha256"]) == 64
-                     and all(c in "0123456789abcdef" for c in evidence["sha256"]),
-                     "evidence.sha256: expected lowercase SHA-256")
-            _integer(evidence["criterion"], "evidence.criterion")
-            _require(evidence["criterion"] < len(task["acceptance"]),
-                     "evidence criterion out of range")
-            _text(evidence["note"], "evidence.note")
-            _text(evidence["reviewer"], "evidence.reviewer")
-            pair = (evidence["path"], evidence["criterion"])
-            _require(pair not in seen_evidence, "duplicate evidence for criterion/path")
-            seen_evidence.add(pair)
-        if task["status"] == "done":
-            _require({e["criterion"] for e in task["evidence"]}
-                     == set(range(len(task["acceptance"]))), "done task requires every criterion")
+        _validate_task(state, task, objects, tasks, decisions)
     _acyclic({key: task["depends_on"] for key, task in tasks.items()}, "task dependencies")
     _task_dependencies(state)
     if state["schema_version"] == 3:
@@ -460,6 +501,7 @@ def _validate_data(state):
                          for t in tasks.values()), "initial ontology tasks require empty snapshots/generations/review reasons")
 
 
+@analyzed
 def validate(state):
     """Check complete structural/semantic contract without filesystem access."""
     try:
@@ -490,15 +532,31 @@ def _hash_file(root, relative):
             _require(not is_link(candidate), "evidence symlink forbidden")
         _require(candidate.resolve().is_relative_to(base), "evidence escapes project")
         _require(candidate.is_file(), f"evidence file missing or not regular: {relative}")
+        info = candidate.stat()
+        # ctime/inode additionally detect same-size rewrites with restored mtime
+        # and file replacement. Never cache errors or skip containment checks.
+        stamp = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        # Windows ctime may mean creation time, not content-change time.
+        # Preserve fresh hashing there rather than trust restored mtime/size.
+        cache = _ontology()._ANALYSIS.get() if os.name != "nt" else None
+        key = (str(candidate), stamp)
+        if cache is not None and key in cache["files"]:
+            return cache["files"][key]
         digest = hashlib.sha256()
         with candidate.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
-        return digest.hexdigest()
+        result = digest.hexdigest()
+        after = candidate.stat()
+        observed = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        if cache is not None and observed == stamp:
+            cache["files"][key] = result
+        return result
     except (OSError, RuntimeError) as exc:
         raise ValueError(f"cannot read evidence {relative}: {exc}") from exc
 
 
+@analyzed
 def inspect_state(state, root):
     """Return computed readiness and stale evidence without modifying state."""
     validate(state)
@@ -629,6 +687,7 @@ def inspect_state(state, root):
     return report
 
 
+@analyzed
 def render_context(state, root):
     report = inspect_state(state, root)
     project = report["project"]
@@ -686,6 +745,7 @@ def render_context(state, root):
     return "\n".join(lines)
 
 
+@analyzed
 def render_ontology(state, root):
     """Readable ontology and a diagram derived from the authoritative state."""
     report = inspect_state(state, root)
@@ -766,17 +826,20 @@ def _invalidate_domain(before, after, impact, root):
     new_deps, _ = _task_dependencies(after)
     tasks = {t["id"]: t for t in after["tasks"]}
     reasons = {}
-    for key in direct:
+    for key in sorted(direct):
         hits = sorted((set(tasks[key]["input_ids"]) | set(tasks[key]["output_ids"])) & affected)
         reasons[key] = [" → ".join(impact["paths"].get(obj, [obj])) for obj in hits] or ["input contract/producer or accepted output changed"]
-    pending = list(direct)
+    # A converging dependent keeps the first discovered reason. Seed and
+    # successor order must therefore be explicit, never set/hash order.
+    pending = sorted(direct)
     while pending:
         parent = pending.pop()
-        for key in tasks:
+        for key in sorted(tasks):
             if parent in set(old_deps.get(key, [])) | set(new_deps.get(key, [])) and key not in reasons:
                 reasons[key] = [f"producer/dependency task {parent} requires renewed review"]
                 pending.append(key)
-    for key, why in reasons.items():
+    for key in sorted(reasons):
+        why = reasons[key]
         if tasks[key]["status"] in {"done", "doing", "review"}:
             _clear_acceptance(tasks[key], "; ".join(why))
     impact["affected_tasks"] = [{"task_id": key, "reasons": reasons[key]} for key in sorted(reasons)]
@@ -784,6 +847,7 @@ def _invalidate_domain(before, after, impact, root):
 
 
 def _graph_operations(state, operations):
+    _ontology().invalidate(state)
     _list(operations, "operations")
     _require(bool(operations), "empty graph transaction")
     # Tombstones are derived from retained transaction history. A deleted ID
@@ -805,6 +869,8 @@ def _graph_operations(state, operations):
                          next(t for t in state["ontology"]["object_types"] if t["id"] == o["type"]).get("immutable", False)}
     protected_relations = {r["id"]: copy.deepcopy(r) for r in state["relations"] if
                            next(t for t in state["ontology"]["relation_types"] if t["id"] == r["type"]).get("immutable", False)}
+    object_positions = {o["id"]: i for i, o in enumerate(state["objects"])}
+    relation_positions = {r["id"]: i for i, r in enumerate(state["relations"])}
     for operation in operations:
         _require(type(operation) is dict, "graph operation must be object")
         op = operation.get("op")
@@ -812,32 +878,39 @@ def _graph_operations(state, operations):
             _shape(operation, {"op", "object"}, "object operation")
             obj = copy.deepcopy(operation["object"])
             _require(type(obj) is dict and "id" in obj, "object missing id")
-            old = next((o for o in state["objects"] if o["id"] == obj["id"]), None)
+            position = object_positions.get(obj["id"]) if type(obj["id"]) is str else None
+            old = (state["objects"][position] if position is not None else
+                   next((o for o in state["objects"] if o["id"] == obj["id"]), None))
             if op == "add_object":
                 _require(old is None and obj["id"] not in used_objects, "object id exists or was retired")
+                object_positions[obj["id"]] = len(state["objects"])
                 state["objects"].append(obj)
                 used_objects.add(obj["id"])
             else:
                 _require(old is not None, "cannot replace unknown object")
-                state["objects"][state["objects"].index(old)] = obj
+                state["objects"][position] = obj
         elif op == "remove_object":
             _shape(operation, {"op", "object_id"}, "remove object")
             _text(operation["object_id"], "object_id")
             old = next((o for o in state["objects"] if o["id"] == operation["object_id"]), None)
             _require(old is not None, "cannot remove unknown object")
             state["objects"].remove(old)
+            object_positions = {o["id"]: i for i, o in enumerate(state["objects"])}
         elif op == "add_relation":
             _shape(operation, {"op", "relation"}, "add relation")
             _require(type(operation["relation"]) is dict and "id" in operation["relation"], "relation missing id")
             _require(operation["relation"]["id"] not in used_relations, "relation id exists or was retired")
+            relation_positions[operation["relation"]["id"]] = len(state["relations"])
             state["relations"].append(copy.deepcopy(operation["relation"]))
             used_relations.add(operation["relation"]["id"])
         elif op == "remove_relation":
             _shape(operation, {"op", "relation_id"}, "remove relation")
             _text(operation["relation_id"], "relation_id")
-            old = next((r for r in state["relations"] if r["id"] == operation["relation_id"]), None)
+            position = relation_positions.get(operation["relation_id"])
+            old = state["relations"][position] if position is not None else None
             _require(old is not None, "cannot remove unknown relation")
             state["relations"].remove(old)
+            relation_positions = {r["id"]: i for i, r in enumerate(state["relations"])}
         elif op == "replace_ontology":
             _shape(operation, {"op", "ontology"}, "replace ontology")
             state["ontology"] = copy.deepcopy(operation["ontology"])
@@ -859,6 +932,7 @@ def _graph_operations(state, operations):
                  f"immutable historical relation {key}: create new records")
 
 
+@analyzed
 def apply_event(state, event, root):
     """Apply one supported event to a deep copy; raise ValueError on rejection."""
     validate(state)
@@ -912,7 +986,13 @@ def apply_event(state, event, root):
                     _clear_acceptance(candidate, f"dependency task {parent} changed")
 
     change = None
-    if action == "migrate_ontology":
+    if action == "set_evidence_dir":
+        _require(state["schema_version"] == 3, "evidence_dir requires schema 3")
+        _evidence_directory(event["evidence_dir"])
+        new["project"]["evidence_dir"] = event["evidence_dir"]
+        change = {"project": {"before": copy.deepcopy(state["project"]),
+                              "after": copy.deepcopy(new["project"])}}
+    elif action == "migrate_ontology":
         _require(state["schema_version"] in {1, 2}, "ontology migration requires legacy schema")
         _list(event["bindings"], "bindings")
         bindings = {}
@@ -933,7 +1013,11 @@ def apply_event(state, event, root):
             current.update(input_snapshot=None, generation=0, review_reasons=[])
             if current["status"] in {"doing", "review", "done"}:
                 _clear_acceptance(current, "ontology migration: legacy evidence was not reviewed against new domain bindings")
-    elif action == "mutate_graph":
+    elif action == "sync_code_graph" and event["operations"] == []:
+        _require(state["schema_version"] == 3, "code graph requires schema 3")
+        # Boş senkronizasyon durum ve geçmiş üzerinde değişiklik yapmaz.
+        return new
+    elif action in {"mutate_graph", "sync_code_graph"}:
         _require(state["schema_version"] == 3, "migrate ontology before graph mutation")
         _graph_operations(new, event["operations"])
         _require(any(new[key] != state[key] for key in ("ontology", "objects", "relations")), "unchanged graph transaction")
@@ -1110,16 +1194,9 @@ def apply_event(state, event, root):
     return new
 
 
-def preview_digest(state, event, root, next_state=None):
-    """Bind a preview to state, action and observed referenced file contents.
-
-    The writer lock serializes cooperating CLI processes, not external editors.
-    This detects observed drift; it is not a filesystem transaction/snapshot.
-    """
-    if next_state is None:
-        next_state = apply_event(state, event, root)
+def _preview_files(models, root):
     paths = set()
-    for model in (state, next_state):
+    for model in models:
         for task in model["tasks"]:
             paths.update(item["path"] for item in task["evidence"])
         if model["schema_version"] == 3:
@@ -1133,10 +1210,92 @@ def preview_digest(state, event, root, next_state=None):
             files[path] = {"sha256": _hash_file(root, path)}
         except (ValueError, OSError) as error:
             files[path] = {"unavailable": str(error)}
+    return files
+
+
+def derived_event_validator(state, root):
+    """One read-only baseline for independent derive events, never a writer.
+
+    Derive only reopens existing tasks or adds consumers with no prerequisites,
+    outputs or approved supports. Such events cannot introduce a dependency
+    cycle, alter the graph or invalidate an existing structural contract.
+    Validate their delta with the same task checker as full validate; everything
+    outside this narrow contract still uses the ordinary preview engine.
+    """
+    validate(state)
+    objects = _index(state["objects"], "objects")
+    tasks = _index(state["tasks"], "tasks")
+    decisions = _index(state["decisions"], "decisions")
+    # Observe the same referenced files once, sharing w102's scoped hash cache.
+    # Unavailable files have the same representation as a full preview digest.
+    files = _preview_files((state,), root)
+
+    def check(event):
+        _require(type(event) is dict, "event must be object")
+        _text(event.get("action"), "event.action")
+        action = event["action"]
+        _require(action in ACTIONS, "unsupported action")
+        if action not in {"extend_model", "reopen_task"}:
+            return preview_event(state, event, root)
+        _shape(event, {"action", "actor", "reason"} | ACTIONS[action], "event")
+        _text(event["actor"], "event.actor")
+        _text(event["reason"], "event.reason")
+        if action == "reopen_task":
+            _text(event["task_id"], "event.task_id")
+            _require(event["task_id"] in tasks, "unknown task_id")
+            _require(tasks[event["task_id"]]["status"] in {"done", "review", "doing"},
+                     "cannot reopen task from this status")
+            return
+        for collection in ("objects", "relations", "tasks"):
+            _list(event[collection], f"event.{collection}")
+        _require(any(event[key] for key in ("objects", "relations", "tasks")), "empty model extension")
+        if event["objects"] or event["relations"] or any(
+                type(t) is not dict or t.get("depends_on") != [] or
+                t.get("output_ids", []) != [] or t.get("support_groups") or t.get("input_fields")
+                for t in event["tasks"]):
+            return preview_event(state, event, root)
+        for added in event["tasks"]:
+            _shape(added, {"id", "status", "evidence"} | DEFINITION_FIELDS |
+                   (DOMAIN_TASK_FIELDS | (set(added) & OPTIONAL_DOMAIN_TASK_FIELDS)
+                    if state["schema_version"] == 3 else set()), "new task")
+            _require(added["status"] == "todo" and added["evidence"] == [],
+                     "new tasks must be todo without evidence")
+            _strings(added["decision_ids"], "new task.decision_ids", unique=True)
+            _require(all(key in decisions and decisions[key]["status"] == "accepted"
+                         for key in added["decision_ids"]), "new tasks require current accepted decisions")
+            if state["schema_version"] == 3:
+                _require(added["input_snapshot"] is None and added["generation"] == 0 and not added["review_reasons"]
+                         and all(added.get(k) is None for k in ("run_snapshot", "output_snapshot", "support_snapshot")),
+                         "new tasks require empty domain acceptance")
+        # Local index only: one proposal must not reserve an ID for another.
+        try:
+            local_tasks = _index(state["tasks"] + event["tasks"], "tasks")
+            for added in event["tasks"]:
+                _validate_task(state, added, objects, local_tasks, decisions)
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+            # Preserve preview rejection order/messages for malformed deltas.
+            return preview_event(state, event, root)
+        return None
+
+    check.file_manifest = files
+    return check
+
+
+@analyzed
+def preview_digest(state, event, root, next_state=None):
+    """Bind a preview to state, action and observed referenced file contents.
+
+    The writer lock serializes cooperating CLI processes, not external editors.
+    This detects observed drift; it is not a filesystem transaction/snapshot.
+    """
+    if next_state is None:
+        next_state = apply_event(state, event, root)
+    files = _preview_files((state, next_state), root)
     return _manifest_hash({"semantics_version": 1, "state": state, "event": event,
                            "next_state": next_state, "files": files})
 
 
+@analyzed
 def preview_event(state, event, root):
     """Run the same transition without writing; expose a reviewable change set."""
     next_state = apply_event(state, event, root)
@@ -1144,7 +1303,10 @@ def preview_event(state, event, root):
     changed_tasks = [{"task_id": t["id"], "before": before_tasks.get(t["id"], {}).get("status"),
                       "after": t["status"], "reasons": t.get("review_reasons", [])}
                      for t in next_state["tasks"] if t != before_tasks.get(t["id"])]
-    change = next_state["history"][-1].get("change", {})
+    if next_state["revision"] == state["revision"]:
+        change = {"operations": [], "impact": _ontology().impact(state, next_state)}
+    else:
+        change = next_state["history"][-1].get("change", {})
     return {"ok": True, "result": "preview", "state_committed": False,
             "revision": state["revision"], "next_revision": next_state["revision"],
             "action": event["action"], "changed_tasks": changed_tasks,
