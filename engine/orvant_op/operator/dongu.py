@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from orvant_op import ayarlar
 from orvant_op.butce import etkin_toplam_butce
 from orvant_op.iz import kaydet
 from orvant_op.mimar.cli import kehanet_hazirla
@@ -20,6 +21,8 @@ from .kota import kota_oku
 from .soru_kuyrugu import (SoruKuyrugu, atomik_yaz, satirlar, simdi, birlestir,
                           gecerlilik_denetle, paket_metni, olcum, kok_eslesir, oz_ayni, TUR_DURUMLARI)
 
+# S3 kehanet denetimi engelleri (yurutme/akis.py `_gorev_yurut`).
+KEHANET_ENGELLERI = {"kehanet zayıf", "kehanet geçersiz", "kehanet doğru referansı reddediyor"}
 TESHIS_DURUMLARI = {"engelli", "ret", "girdi_bekliyor", "yetki_bekliyor"}
 
 
@@ -45,7 +48,7 @@ class KotaSiniri(RuntimeError):
 
 class Operator:
     def __init__(self, calisma, *, yurutucu=None, goals_db=None, kehanet_yurutucu=None,
-                 plan_yurutucu=None, iz_yolu=None, oturum_dizini=None, kota_esigi=80,
+                 plan_yurutucu=None, iz_yolu=None, oturum_dizini=None, kota_esigi=None,
                  skill_dizinleri=None, path=None, yurut_zaman_asimi=3600, kehanet_zaman_asimi=1500):
         self.calisma = Path(calisma).resolve()
         self.kok = self.calisma / "operator"
@@ -60,7 +63,8 @@ class Operator:
         self.mimar = Mimar(self.calisma, yurutucu=plan_yurutucu, iz_yolu=iz_yolu)
         self.kehanet_yurutucu = kehanet_yurutucu
         self.oturum_dizini = oturum_dizini
-        self.kota_esigi = kota_esigi
+        # G-162: None → ayar katmanı; ayar yoksa eşik kapalı (kota yine okunur ve raporlanır).
+        self.kota_esigi = ayarlar.kota_esigi() if kota_esigi is None else kota_esigi
         self.envanter_ayarlari = {"skill_dizinleri": skill_dizinleri, "path": path}
         self.sorular = SoruKuyrugu(self.calisma)
         self.kehanet_denendi = set()
@@ -76,7 +80,7 @@ class Operator:
         oran = self.son_kota["used_percent"]
         if oran is None and "kota okunamadı" not in self.uyarilar:
             self.uyarilar.append("kota okunamadı")
-        if oran is not None and oran >= self.kota_esigi:
+        if oran is not None and self.kota_esigi is not None and oran >= self.kota_esigi:
             raise KotaSiniri("Kota eşiğine ulaşıldı")
 
     def _gorev(self, kimlik):
@@ -144,6 +148,12 @@ class Operator:
             komut = self._komut("mimar", "kabul-degistir", self.calisma, gorev["id"],
                                 "--kabul-id", "<kabul_id>", "--beklenen", "<beklenen>",
                                 "--onay-olay", "<onay_olay_id>", "<gerekçe>")
+        elif tur == "yukselt" and "mimar kehanet" in (komut or ""):
+            metin = metin or (f"{gorev['id']} kehanet denetiminde durdu ({_kisa(neden, 120)}); işçi koşmadı. "
+                              "Kehanet referansla yeniden üretilip görev açılsın mı, yoksa sözleşme mi gözden geçirilsin?")
+        elif tur == "yukselt" and "yeniden-planla" in (komut or ""):
+            metin = metin or (f"{gorev['id']} için {_kisa(neden, 120)}. Ek deneme bunu çözmez; "
+                              "kök bütçe yeniden planlamada artırılsın mı (butce_artir)?")
         else:
             metin = metin or (f"{gorev['id']} kendi kendine ilerleyemiyor ({_kisa(neden, 120)}). "
                               "Ek deneme hakkı verilsin mi, yoksa görev yeniden mi ele alınsın?")
@@ -154,9 +164,16 @@ class Operator:
         elif tur == "yetki":
             baglam.update(secenekler=["verildi", "reddedildi"], risk=_kisa("; ".join(
                 str((istek or {})[k]) for k in ("eylem", "kapsam", "ayrinti") if (istek or {}).get(k))) or None)
+        elif tur == "yukselt" and "mimar kehanet" in (komut or ""):
+            baglam.update(secenekler=["kehaneti referansla yeniden üret ve görevi aç",
+                                      "sözleşme/kabul ölçütünü gözden geçir"],
+                          risk="Aynı kehanetle ek deneme yine engellenir; yeni kehanet pozitif kontrolden geçmeli.")
         elif tur == "yukselt" and "--ek-deneme" in (komut or ""):
             baglam.update(secenekler=["ek deneme hakkı ver", "görevi yeniden planla"],
                           risk=f"Görevin deneme/token bütçesi artar (mevcut: {gorev['butce']}).")
+        elif tur == "yukselt" and "yeniden-planla" in (komut or ""):
+            baglam.update(secenekler=["kök bütçeyi yeniden planlamada artır (butce_artir)", "görevi bırak"],
+                          risk=f"Kök token sınırı artar ({neden}).")
         elif tur == "geri_alma":
             baglam["risk"] = "kabul geri alınır; bağımlılar yeniden denetlenir"
         oneri = teshis.get("bakim_onerisi") or teshis.get("oneri")
@@ -166,6 +183,31 @@ class Operator:
         soru = self.sorular.taslak(gorev["id"], tur, anahtar,
                                   metin if tur == "karar" else _kisa(metin), neden, komut, **baglam)
         return self.sorular.baglamla(soru, self.yurutme._plan(), self.mimar.kararlar(), self.mimar.yetkiler())
+
+    def _kok_butce_sorusu(self, gorev, ek=None):
+        """Kök bütçe doluysa ek deneme işe yaramaz; artış yalnız yeniden planlamada (G-103, G-148)."""
+        from orvant_op.butce import kok_butce_durumu
+        butce = kok_butce_durumu(self.calisma, self.yurutme._plan(), gorev["id"])
+        if butce["kalan"] > 0:
+            return []
+        neden = f"Kök token bütçesi doldu ({butce['harcanan']}/{butce['sinir']}, kök {butce['kok']})"
+        if ek:
+            neden = f"{ek}; {neden}"
+        komut = self._komut("mimar", "yeniden-planla", self.calisma,
+                            neden + "; butce_artir gerekli", "--gorev", gorev["id"])
+        return [self._soru(gorev, "yukselt", neden, komut=komut)]
+
+    def _kehanet_engeli_sorusu(self, gorev):
+        """S3 kehanet denetimi engeli makbuz/teşhis bırakmaz; kullanıcıya yol gösteren soru (G-175)."""
+        engeller = [e for e in satirlar(self.yurutme.kok / "engeller.jsonl") if e.get("gorev") == gorev["id"]]
+        neden = engeller[-1]["neden"] if engeller else None
+        if neden not in KEHANET_ENGELLERI:
+            return []
+        neden = f"S3 {neden}; işçi koşmadı"
+        komut = (self._komut("mimar", "kehanet", self.calisma, "--gorev", gorev["id"], "--yeniden", "--referans")
+                 + " && " + self._komut("yurut", "ac", self.calisma, gorev["id"], "--ek-deneme", "1",
+                                        "Kehanet referansla yeniden üretildi"))
+        return [self._soru(gorev, "yukselt", neden, komut=komut)]
 
     def _hak_var(self, gorev):
         from orvant_op.butce import kok_butce_durumu
@@ -284,7 +326,11 @@ class Operator:
             if gorev["durum"] == "engelli":
                 makbuzlar = self.yurutme._makbuzlar(gorev)
                 if makbuzlar and json.loads(makbuzlar[-1].read_text(encoding="utf-8")).get("isci_zaman_asimi"):
-                    sorular.append(self._soru(gorev, "yukselt", "İşçi zaman aşımı; ek deneme gerekli"))
+                    # Kök bütçe doluyken ek deneme hemen yine engellenir (G-148).
+                    sorular += (self._kok_butce_sorusu(gorev, "İşçi zaman aşımı")
+                                or [self._soru(gorev, "yukselt", "İşçi zaman aşımı; ek deneme gerekli")])
+                if not sorular and not any(e["gorev"] == kimlik and e["adim"] == "soru" for e in eylemler):
+                    sorular += self._kok_butce_sorusu(gorev) or self._kehanet_engeli_sorusu(gorev)
             if (gorev["durum"] in ("engelli", "ret")
                     and any(s["gorev"] == kimlik and s.get("kapanis") == "tur_degisti" for s in kapanacak)
                     and not any(e["gorev"] == kimlik and e["adim"] == "soru" for e in eylemler)
@@ -528,6 +574,9 @@ class Operator:
                 tuple(sorted(s["id"] for s in self.sorular.acik())))
 
     def surdur(self, *, en_fazla_tur=5, tur_basina_kosu=3, kuru=False):
+        from orvant_op import proje
+        if proje.load(self.calisma):
+            raise ValueError("project-bound sessions use orvant proje surdur; paid runs require orvant proje surdur --execute")
         if en_fazla_tur < 1 or tur_basina_kosu < 1:
             raise ValueError("Tur ve koşu sınırları pozitif olmalı")
         self.kehanet_denendi = set()
@@ -724,7 +773,8 @@ def rapor_metni(sonuc):
                     if soru.get("hazir_komut"):
                         satir.append(f"  {soru['hazir_komut']}")
         if "kota" in sonuc:
-            satir.append(f"Kota: {sonuc['kota']['used_percent']} (eşik {sonuc['kota_esigi']})")
+            esik = "kapalı" if sonuc["kota_esigi"] is None else sonuc["kota_esigi"]
+            satir.append(f"Kota: {sonuc['kota']['used_percent']} (eşik {esik})")
         satir.extend(["", "## Soru paketleri (önizleme)", "",
                       paket_metni(sonuc.get("soru_onizleme", []))])
         return "\n".join(satir)

@@ -15,7 +15,8 @@ def parser_kur():
     surdur.add_argument("calisma")
     surdur.add_argument("--en-fazla-tur", type=int, default=5)
     surdur.add_argument("--tur-basina-kosu", type=int, default=3)
-    surdur.add_argument("--kota-esigi", type=float, default=80)
+    surdur.add_argument("--kota-esigi", type=float, default=None,
+                        help="Kota yüzdesi eşiği; verilmezse ayar ([operator].kota_esigi), yoksa kapalı")
     surdur.add_argument("--yurut-zaman-asimi", type=float, default=3600, help="İşçi süre sınırı (saniye)")
     surdur.add_argument("--kehanet-zaman-asimi", type=float, default=1500, help="Kehanet süre sınırı (saniye)")
     surdur.add_argument("--kuru", action="store_true")
@@ -34,7 +35,7 @@ def parser_kur():
 def main(argv=None):
     args = parser_kur().parse_args(argv)
     try:
-        operator = Operator(args.calisma, kota_esigi=getattr(args, "kota_esigi", 80),
+        operator = Operator(args.calisma, kota_esigi=getattr(args, "kota_esigi", None),
                             yurut_zaman_asimi=getattr(args, "yurut_zaman_asimi", 3600),
                             kehanet_zaman_asimi=getattr(args, "kehanet_zaman_asimi", 1500))
         if args.eylem == "cevapla":
