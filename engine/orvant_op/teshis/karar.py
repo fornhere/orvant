@@ -105,7 +105,9 @@ def teshis_et(baglam):
     kotu_komut = [k for k in komutlar if k.get("exit_code") != 0 or k.get("zaman_asimi")]
     komut_metni = " ".join(str(k.get("cikti_kuyrugu") or "").casefold() for k in komutlar)
     hata_metni = " ".join(str(k.get("cikti_kuyrugu") or "").casefold() for k in kotu_komut)
-    if (baglam.get("istisna") and baglam.get("isci_kostu") is False
+    if _var(ozet, "claude code oturumu geçersiz", "codex oturumu geçersiz"):
+        sinif, eylem, hipotez = "ortam_gozlem", "yetki_bekle", "Model CLI kimlik doğrulaması veya oturumu geçersiz"
+    elif (baglam.get("istisna") and baglam.get("isci_kostu") is False
             and baglam.get("istisna_turu") not in ("ValueError", "TimeoutExpired", "YurutucuZamanAsimi")
             and not _var(str(baglam["istisna"]).casefold(), "zaman aşımı", "timed out", "timeout")):
         sinif, eylem, hipotez = "orvant_kusuru", "yukselt", "İşçi başlamadan Orvant iç hatası: " + str(baglam["istisna"])
