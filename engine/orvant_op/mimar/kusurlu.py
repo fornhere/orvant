@@ -10,8 +10,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .depo_girdileri import referans_bagi_dogrula, agac_dogrula
-
 VARYANT_ADLARI = ("bos", "iskelet", "sabit", "kismi")
 DIZIN = "<dizin>"
 
@@ -116,29 +114,18 @@ def referans_denetle(sozlesme, dosyalar):
     return {"durum": "uretildi", "neden": "", "dosyalar": dosyalar}
 
 
-def referans_oku(yol, sozlesme, sozlesme_sha256, *, depo=None):
-    def kaynak_reddi(veri):
-        try:
-            referans_bagi_dogrula(depo, veri)
-        except ValueError as exc:
-            return {**veri, "durum": "atlandi", "neden": f"referans kaynak bağı doğrulanamadı: {exc}", "dosyalar": [],
-                    "kaynak_bagi": "gecersiz"}
-
+def referans_oku(yol, sozlesme, sozlesme_sha256):
     try:
         veri = json.loads(yol.read_text(encoding="utf-8"))
-        reddi = kaynak_reddi(veri)
-        if reddi:
-            return reddi
         if veri.get("sozlesme_sha256") != sozlesme_sha256:
-            return {**veri, "durum": "atlandi", "neden": "referans eski sözleşmeye ait", "dosyalar": []}
+            return {"durum": "atlandi", "neden": "referans eski sözleşmeye ait", "dosyalar": []}
         if veri.get("durum") == "atlandi":
             return veri
-        return {**veri, **referans_denetle(sozlesme, veri["dosyalar"])}
+        return referans_denetle(sozlesme, veri["dosyalar"])
     except FileNotFoundError:
-        sonuc = {"durum": "atlandi", "neden": "referans yok", "dosyalar": []}
+        return {"durum": "atlandi", "neden": "referans yok", "dosyalar": []}
     except (ValueError, KeyError, AttributeError, TypeError) as exc:
-        sonuc = {"durum": "atlandi", "neden": f"referans okunamadı: {exc}", "dosyalar": []}
-    return kaynak_reddi({}) or sonuc
+        return {"durum": "atlandi", "neden": f"referans okunamadı: {exc}", "dosyalar": []}
 
 
 def _referans_varyanti(sozlesme, referans):
@@ -195,12 +182,21 @@ def pozitif_denetimi(yol, sozlesme, agac_ac, girdiler, referans, zaman_asimi=60)
     from .kehanet import calistir_kehanet
     if not referans or referans["durum"] != "uretildi":
         return {"durum": "atlandi", "neden": (referans or {}).get("neden", "referans yok"), "kanit": []}
+    from .izlenebilirlik import calisma_denetimi
     with agac_ac() as agac:
         uygula(agac, _referans_varyanti(sozlesme, referans))
         sonuc = calistir_kehanet(yol, agac, girdiler, zaman_asimi=zaman_asimi)
     negatif = negatif_kontrol(sonuc)
-    return {**negatif, "durum": "gecti" if sonuc.get("gecti") else "reddetti",
-            "kontroller": [k["ad"] for k in sonuc.get("kontroller", []) if k.get("gecti") is False]}
+    iyol = Path(yol).with_suffix(".iddialar.json")
+    try:
+        iddialar = json.loads(iyol.read_text(encoding="utf-8")) if iyol.exists() else None
+    except ValueError:
+        iddialar = None
+    # G-131: izinsiz araç ve atlanan kontrol referansta başarı sayılmaz; ölçüt gevşetilmez.
+    kapi = calisma_denetimi(sonuc, iddialar)
+    return {**negatif, "durum": "gecti" if sonuc.get("gecti") and not kapi else "reddetti",
+            "kontroller": [k["ad"] for k in sonuc.get("kontroller", []) if k.get("gecti") is False],
+            "kapi_hatalari": kapi}
 
 
 def ornege_ozel_denetimi(yol, sozlesme, agac_ac, girdiler, referans, zaman_asimi=60):
@@ -482,31 +478,13 @@ def denetim(yazar, gorev, *, kaynak="hazirla", yeniden_hakki=True):
         sozlesme = json.loads(syol.read_text(encoding="utf-8")) if syol.exists() else None
         kayit["uyarilar"] = sozlesme_yol_uyarilari(sozlesme)
         ryol = yol.with_suffix(".referans.json")
-        referans = referans_oku(ryol, sozlesme, kimlik["sozlesme_sha256"], depo=depo)
-        if referans.get("kaynak_bagi") == "gecersiz":
-            neden = referans["neden"]
-            if kaynak != "denetle":
-                raise ValueError(neden)
-            kayit.update(zayiflik_denetimi="gecersiz", sonuc="bozuk",
-                         neden="referans_kaynak_bagi", gorev_durumu=gorev["durum"],
-                         temiz_agac_sonucu={"gecti": None, "hata": neden})
-            kayit["pozitif_kontrol"]["neden"] = neden
-            kayit["uyarilar"].append(neden)
-            _makbuz_yaz(myol, kayit, kimlik, kaynak)
-            return kayit
-        if not ryol.exists() and not yazar.referans:
-            referans = None  # Kaynaksız eski referanssız denetim dört varyantı korur.
+        referans = (referans_oku(ryol, sozlesme, kimlik["sozlesme_sha256"])
+                    if ryol.exists() or yazar.referans else None)
         cikar = [d["yol"] for d in (sozlesme or {}).get("dosyalar", [])] if (
             kaynak == "denetle" or yazar.referans) else []
 
-        @contextmanager
         def agac_ac():
-            referans_bagi_dogrula(depo, referans or {})
-            with temiz_agac(depo, yontem="klon" if kaynak == "denetle" else "worktree", cikar=cikar) as agac:
-                if referans is not None and "depo_kaynak_kimligi" in referans:
-                    agac_dogrula(agac, referans)
-                yield agac
-            referans_bagi_dogrula(depo, referans or {})
+            return temiz_agac(depo, yontem="klon" if kaynak == "denetle" else "worktree", cikar=cikar)
 
         with agac_ac() as agac:
             sonuc = calistir_kehanet(yol, agac, girdiler)
@@ -557,6 +535,14 @@ def denetim(yazar, gorev, *, kaynak="hazirla", yeniden_hakki=True):
                                          "; ".join(pozitif["kanit"]))
         kayit["pozitif_kontrol"] = pozitif
         kayit["uyarilar"].extend(kusur["uyarilar"])
+        kapi = pozitif.get("kapi_hatalari") or []
+        if kapi and kayit["zayiflik_denetimi"] != "gecersiz":
+            # Kapıda çalıştırılamayan kehanet doğru işi de reddeder (G-131): kullanılamaz.
+            kayit.update(zayiflik_denetimi="gecersiz", neden="kapida_calistirilamaz")
+            geri_bildirim = ("Kehanet doğru referansta kapı kısıtlarıyla çalıştırılamadı: " +
+                             "; ".join(kapi) + ". Yalnız izinli araçları kullan, her iddianın "
+                             "kontrolünü gerçekten koş; atlanan kontrolü geçti sayma." +
+                             ("\n" + geri_bildirim if geri_bildirim else ""))
         if pozitif["durum"] == "reddetti" and yazar.referans:
             geri_bildirim = (
                 "Kehanet sözleşmeye uyan doğru referans çıktıyı reddetti: " +

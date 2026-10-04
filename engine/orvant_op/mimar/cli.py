@@ -10,6 +10,10 @@ from .kehanet import Kehanet, kehanet_gecersiz_mi, kehanet_dayanak_degisti, keha
 def parser_kur():
     p = argparse.ArgumentParser(prog="python3 -m orvant_op mimar")
     sub = p.add_subparsers(dest="eylem", required=True)
+    kayit = sub.add_parser("proje-kaydi", help="Onaylı planı şema-3 proje kaydına aktar")
+    kayit.add_argument("calisma")
+    kayit.add_argument("--kok", required=True)
+    kayit.add_argument("--kuru", action="store_true")
     envanter = sub.add_parser("envanter", help="Yerel skill ve araç envanterini çıkar")
     envanter.add_argument("calisma")
     envanter.add_argument("--skill-dizini", action="append", dest="skill_dizinleri")
@@ -153,7 +157,10 @@ def main(argv=None):
     args = parser_kur().parse_args(argv)
     mimar = Mimar(args.calisma)
     try:
-        if args.eylem == "plan":
+        if args.eylem == "proje-kaydi":
+            from .proje_kaydi import aktar
+            sonuc = aktar(args.calisma, args.kok, kuru=args.kuru)
+        elif args.eylem == "plan":
             sonuc = mimar.planla(depo=args.depo, yeni_taslak=args.yeni_taslak)
         elif args.eylem == "envanter":
             sonuc = mimar.envanter(skill_dizinleri=args.skill_dizinleri)

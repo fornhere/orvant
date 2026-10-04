@@ -302,6 +302,15 @@ class Mimar:
         return kalan, dusen
 
     def yeniden_planla(self, neden, *, gorev=None, teshis_dosyasi=None):
+        # G-104: okuma–model çağrısı–yazma yürütme kilidi altında; eşzamanlı yürütmenin plan yazımı kaybolmaz.
+        # Yürütme hiç başlamamışsa (yurutme/ yok) yarışacak yazıcı yoktur; kilit dosyası da oluşturulmaz.
+        from orvant_op.yurutme.zamanlayici import YurutmeKilidi
+        if not (self.calisma / "yurutme").is_dir():
+            return self._yeniden_planla(neden, gorev=gorev, teshis_dosyasi=teshis_dosyasi)
+        with YurutmeKilidi(self.calisma):
+            return self._yeniden_planla(neden, gorev=gorev, teshis_dosyasi=teshis_dosyasi)
+
+    def _yeniden_planla(self, neden, *, gorev=None, teshis_dosyasi=None):
         if not isinstance(neden, str) or not neden.strip():
             raise ValueError("yeniden planlama nedeni gerekli")
         plan = self.oku()

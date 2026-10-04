@@ -4,27 +4,9 @@
   "required": [
     "betik",
     "sozlesme",
-    "izlenebilirlik"
+    "iddialar"
   ],
   "properties": {
-    "izlenebilirlik": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["kontrol", "kaynak_turu", "kaynak_id", "kaynak_metin", "iddia", "kapsam", "karsilastirma"],
-        "properties": {
-          "kontrol": {"type": "string", "minLength": 1},
-          "kaynak_turu": {"type": "string", "enum": ["kabul", "gereksinim"]},
-          "kaynak_id": {"type": "string", "minLength": 1},
-          "kaynak_metin": {"type": "string", "minLength": 1},
-          "iddia": {"type": "string", "minLength": 1},
-          "kapsam": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-          "karsilastirma": {"type": "string", "enum": ["yapisal", "anlamsal", "esitlik", "tolerans", "tarihsel"]}
-        }
-      }
-    },
     "betik": {
       "type": "string"
     },
@@ -110,6 +92,38 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "iddialar": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kimlik",
+          "kabul_kimligi",
+          "kabul_alintisi",
+          "kontrol"
+        ],
+        "properties": {
+          "kimlik": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kabul_kimligi": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kabul_alintisi": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kontrol": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
