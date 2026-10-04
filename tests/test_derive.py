@@ -51,8 +51,9 @@ class DeriveTests(unittest.TestCase):
         path = self.root / 'event.json'
         path.write_text(json.dumps(payload), encoding='utf-8')
         revision = self.state['revision']
-        self.cli('preview', '--event', path, '--expected-revision', revision)
-        self.cli('apply', '--event', path, '--expected-revision', revision)
+        preview = self.cli('preview', '--event', path, '--expected-revision', revision)
+        self.cli('apply', '--event', path, '--expected-revision', revision,
+                 '--preview-digest', preview['preview_digest'])
         self.state = json.loads((self.root / '.project/state.json').read_text(encoding='utf-8'))
 
     def complete_cli(self, identifier):
@@ -191,6 +192,15 @@ class DeriveTests(unittest.TestCase):
         self.assertEqual(len(limited['lanes']), 1)
         self.assertTrue(limited['queued_lanes'])
         self.assertIn('expected-revision', limited['single_writer'])
+
+    def test_cancelled_tasks_are_absent_from_derive_and_lanes(self):
+        self.install()
+        self.apply_cli(event('cancel_task', task_id='run-a', allow_done=False))
+        derived = self.cli('derive')
+        self.assertFalse(any(p.get('task_id') == 'run-a' for p in derived['proposals']))
+        lanes = self.cli('lanes')
+        self.assertFalse(any('run-a' in lane['tasks'] + lane['queued_tasks']
+                             for lane in lanes['lanes'] + lanes['queued_lanes']))
 
     def test_unknown_scope_serial_and_missing_impact_explained(self):
         self.state['tasks'] = [task('unknown', ['experiment-a'], [])]

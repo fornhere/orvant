@@ -102,6 +102,36 @@ class ValidationTests(ProjectCase):
 
 
 class WorkflowTests(ProjectCase):
+    def test_cancel_task_requires_reason_and_done_override(self):
+        self.rejected({"action": "cancel_task", "actor": "test-agent", "reason": "",
+                       "task_id": "T-DATA", "allow_done": False})
+        self.apply("cancel_task", task_id="T-DATA", allow_done=False)
+        self.assertEqual(self.state["tasks"][0]["status"], "cancelled")
+        self.assertEqual(self.state["history"][-1]["action"], "cancel_task")
+        dependent = self.task_view("T-COMPARE")
+        self.assertEqual(dependent["effective_status"], "blocked")
+        self.assertIn("dependency T-DATA: cancelled", dependent["issues"])
+
+        self.state = build_spec()
+        self.finish("T-DATA")
+        self.rejected(event("cancel_task", task_id="T-DATA", allow_done=False))
+        (self.root / "tools.json").write_text("changed", encoding="utf-8")
+        self.assertEqual(self.task_view("T-DATA")["effective_status"], "needs_review")
+        self.rejected(event("cancel_task", task_id="T-DATA", allow_done=False))
+        self.apply("cancel_task", task_id="T-DATA", allow_done=True)
+
+    def test_supersede_task_links_existing_replacement_and_excludes_old_context(self):
+        self.rejected(event("supersede_task", task_id="T-DATA",
+                            replacement_task_id="missing", allow_done=False))
+        self.apply("supersede_task", task_id="T-DATA",
+                   replacement_task_id="T-COMPARE", allow_done=False)
+        old = self.state["tasks"][0]
+        self.assertEqual((old["status"], old["superseded_by"]),
+                         ("cancelled", "T-COMPARE"))
+        context = core.render_context(self.state, self.root)
+        self.assertNotIn("- T-DATA [", context)
+        self.assertIn("- T-COMPARE [", context)
+
     def test_dependency_gate_and_reopen(self):
         self.rejected(event("start_task", task_id="T-COMPARE"))
         self.finish("T-DATA")
