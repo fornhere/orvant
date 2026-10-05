@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kat_surumu", "gorev", "kapsam", "kontroller", "kat_sha256"],
+  "properties": {
+    "kat_surumu": {"const": 1},
+    "gorev": {"type": "string", "minLength": 1},
+    "kapsam": {
+      "type": "object", "additionalProperties": false,
+      "required": ["yazilabilir"],
+      "properties": {
+        "yazilabilir": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["yol", "anlam"],
+          "properties": {
+            "yol": {"type": "string", "minLength": 1},
+            "anlam": {"enum": ["dosya", "dizin_ve_alti"]}
+          }
+        }}
+      }
+    },
+    "kontroller": {"type": "array", "minItems": 1, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "dayanak_ids", "alinti", "gozlem", "islem", "beklenen", "uygulayici"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "dayanak_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "alinti": {"type": "string", "minLength": 1},
+        "gozlem": {"type": "string", "minLength": 1},
+        "islem": {"enum": ["var", "yok", "tip", "esit", "aralik", "regex_tam", "kume_esit", "ayrik", "say", "tum", "herhangi"]},
+        "beklenen": {},
+        "uygulayici": {"const": "kat-stdlib-v1"}
+      }
+    }},
+    "kat_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
