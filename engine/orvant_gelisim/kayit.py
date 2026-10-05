@@ -33,6 +33,7 @@ MALIYET = ("girdi_token", "onbellek_token", "cikti_token", "saniye", "insan_daki
 ALANLAR = {"id", "t", "proje", "kosu", "aktor", "katman", "is_turu", "sonuc",
            "maliyet", "orvant_surumu", "mudahale", "benzetim", "ozet", "kanit", "ham",
            "yurutme_id", "miras"}
+EK_ALANLAR = {"olay_kokeni"}
 
 
 def _utc(value):
@@ -47,8 +48,13 @@ def _utc(value):
 
 
 def denetle(o):
-    if not isinstance(o, dict) or set(o) != ALANLAR:
-        raise ValueError(f"olay alanları: eksik={sorted(ALANLAR-set(o)) if isinstance(o, dict) else sorted(ALANLAR)}, fazla={sorted(set(o)-ALANLAR) if isinstance(o, dict) else []}")
+    if not isinstance(o, dict) or not ALANLAR <= set(o) or set(o) - ALANLAR - EK_ALANLAR:
+        raise ValueError(f"olay alanları: eksik={sorted(ALANLAR-set(o)) if isinstance(o, dict) else sorted(ALANLAR)}, fazla={sorted(set(o)-ALANLAR-EK_ALANLAR) if isinstance(o, dict) else []}")
+    if "olay_kokeni" in o and (not isinstance(o["olay_kokeni"], dict)
+            or set(o["olay_kokeni"]) != {"orvant_surumu"}
+            or not isinstance(o["olay_kokeni"]["orvant_surumu"], str)
+            or not o["olay_kokeni"]["orvant_surumu"]):
+        raise ValueError("olay_kokeni geçersiz")
     if not isinstance(o["id"], str) or not re.fullmatch(r"[0-9a-f]{16}(?:[0-9a-f]{16})?", o["id"]):
         raise ValueError("id hex 16 veya 32 hane olmalı")
     _utc(o["t"])
@@ -143,6 +149,14 @@ def yaz(yol, item):
             fh.flush()
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def olay_kokeni_ekle(item, surum=None):
+    """Yazılan kopyaya, yalnız açıkça bilinen koşu sürümünü ekle."""
+    yeni = copy.deepcopy(item)
+    if "olay_kokeni" not in yeni and surum is not None:
+        yeni["olay_kokeni"] = {"orvant_surumu": surum}
+    return yeni
 
 
 def oku(yol):
@@ -255,6 +269,7 @@ def mudahale_yaz(args):
                 aktor_kimlik=args.aktor_kimlik, sonuc=args.sonuc, ozet=args.ozet,
                 kosu=args.kosu, kanit=args.kanit, maliyet={"insan_dakika": args.insan_dakika},
                 orvant_surumu=surum, ham=ham, mudahale_bolumu=bolum)
+    item = olay_kokeni_ekle(item, args.surum)
     yaz(yol, item)
     print(f"{item['id']} bolum={bolum}")
 
@@ -345,6 +360,7 @@ def main():
                     orvant_surumu=surum, ham=ham, onerdi=args.onerdi,
                     karar_verdi=args.karar_verdi, uyguladi=args.uyguladi,
                     mudahale_bolumu=args.bolum)
+        item = olay_kokeni_ekle(item, args.surum)
         yaz(args.dosya, item)
         print(item["id"])
     elif args.komut == "mudahale":
