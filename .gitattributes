@@ -1,0 +1,8 @@
+# Satır sonları depoda ve çalışma ağacında LF: kayıt/kanıt hash'leri ve yönetilen betik karşılaştırmaları
+# platformdan bağımsız kararlı kalmalı (Windows'ta core.autocrlf=true bunu bozardı).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.whl binary

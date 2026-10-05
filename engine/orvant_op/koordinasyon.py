@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 
+from orvant_op import uyum
 from .ayarlar import koordinasyon_kaynaklari
 
 
@@ -59,6 +60,8 @@ def _kayitlar(kaynak):
 def _kesisir(kalip, dosya):
     dosya = _yol_normalize(dosya)
     kalip = kalip.rstrip("/")
+    if uyum.WINDOWS:
+        dosya, kalip = dosya.casefold(), kalip.casefold()
     if any(c in kalip for c in "*?["):
         return fnmatch.fnmatchcase(dosya, kalip)
     return dosya == kalip or dosya.startswith(kalip + "/")
@@ -86,7 +89,8 @@ def cakismalari_bul(baslangic, gorev_id, dosyalar):
 
 
 def _git(kok, *args):
-    sonuc = subprocess.run(["git", "-C", str(kok), *args], capture_output=True, text=True)
+    sonuc = subprocess.run(["git", "-c", "core.quotepath=off", "-C", str(kok), *args],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     if sonuc.returncode:
         raise ValueError(sonuc.stderr.strip() or "git komutu başarısız")
     return sonuc.stdout

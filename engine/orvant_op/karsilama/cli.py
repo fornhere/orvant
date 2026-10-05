@@ -2,11 +2,12 @@
 import argparse
 import json
 
+from orvant_op.uyum_komut import konsolu_utf8_yap, prog
 from .durum import Karsilama
 
 
 def parser_kur():
-    p = argparse.ArgumentParser(prog="python3 -m orvant_op karsila")
+    p = argparse.ArgumentParser(prog=prog("karsila"))
     sub = p.add_subparsers(dest="eylem", required=True)
     baslat = sub.add_parser("baslat", help="Karşılama oturumu aç")
     baslat.add_argument("calisma")
@@ -33,6 +34,7 @@ def parser_kur():
 
 
 def main(argv=None):
+    konsolu_utf8_yap()
     args = parser_kur().parse_args(argv)
     k = Karsilama(args.calisma)
     try:

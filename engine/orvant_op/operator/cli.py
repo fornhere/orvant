@@ -4,12 +4,13 @@ import argparse
 import json
 import sys
 
+from orvant_op.uyum_komut import konsolu_utf8_yap, prog
 from .dongu import Operator, rapor_metni
 from .soru_kuyrugu import paket_metni
 
 
 def parser_kur():
-    parser = argparse.ArgumentParser(prog="python3 -m orvant_op.operator")
+    parser = argparse.ArgumentParser(prog=prog(modul="orvant_op.operator"))
     alt = parser.add_subparsers(dest="eylem", required=True)
     surdur = alt.add_parser("surdur", help="Yetkili işleri sınırlar içinde sürdür")
     surdur.add_argument("calisma")
@@ -33,6 +34,7 @@ def parser_kur():
 
 
 def main(argv=None):
+    konsolu_utf8_yap()
     args = parser_kur().parse_args(argv)
     try:
         operator = Operator(args.calisma, kota_esigi=getattr(args, "kota_esigi", None),

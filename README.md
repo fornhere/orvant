@@ -64,14 +64,30 @@ You will see the ready task, its blocked dependent task, and a Mermaid object ma
 
 ## Run it on your repository
 
-The engine requires Linux, Git, Python 3.11+, and installed, signed-in **Codex CLI or Claude Code (one is enough)**. Both are supported equally; neither is the default or experimental. It was developed with `codex-cli 0.155.1`; other versions are unverified, and no verified Claude Code version is claimed. Engine behavior on macOS or Windows is unverified.
+The engine requires Git, Python 3.11+, and installed, signed-in **Codex CLI or Claude Code (one is enough)**. Both workers are supported equally; neither is the default or experimental. The engine was developed on Linux with `codex-cli 0.155.1`. Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` has been verified locally; other Windows versions and other Codex CLI versions are unverified. macOS is unverified.
 
 Worker selection: `ORVANT_YURUTUCU=codex|claude` takes precedence over `orvant.toml` with `[yurutucu] tur = "codex"` or `tur = "claude"`. Without either setting, exactly one installed executable (on PATH or at its configured path) is detected automatically. If both are installed, explicit selection is required; otherwise Orvant reports `iki yürütücü bulundu` (two executors found).
 
-Oracle OS isolation on Linux requires bubblewrap (`bwrap`) or Codex sandbox (`codex sandbox`), independently of the selected worker. In `orvant.toml`, `[kehanet] yalitim = "auto"` tries verified `bwrap` first, then Codex sandbox; `yalitim = "bwrap"` or `yalitim = "codex"` forces that backend. If no usable isolation backend is available, Orvant does not run the oracle: it fails closed and never runs it without isolation.
+Oracle OS isolation requires bubblewrap (`bwrap`) on Linux or Codex sandbox (`codex sandbox`) on Windows, independently of the selected worker. In `orvant.toml`, `[kehanet] yalitim = "auto"` tries the verified Linux backend first, then Codex sandbox; `yalitim = "bwrap"` or `yalitim = "codex"` forces that backend. If no usable isolation backend is available, Orvant does not run the oracle: it fails closed and never runs it without isolation.
+
+On Windows, the sandbox user cannot run Python from your user profile, so you must first create a readable Python copy:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+py -3 -m pip install .
+py -3 -m orvant_op.mimar.yalitim_windows kur
+```
+
+On Linux:
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install .
+```
+
+Then, from either OS:
+
+```sh
 orvant karsila baslat "<session>" --hedef "<goal>"       # no model
 orvant karsila ilerle "<session>"                        # may call model
 orvant karsila sorular "<session>"                       # no model; answer as the real user
@@ -81,6 +97,8 @@ orvant mimar plan "<session>" --depo "<repository>"      # calls model
 orvant surdur "<session>" --kuru                          # no model
 orvant surdur "<session>"                                # may call model and run work
 ```
+
+Windows users can run the same commands with `py -3 -m orvant_op ...` or `python ...` if `orvant` is not on PATH. See [docs/WINDOWS.md](docs/WINDOWS.md) for the full Windows setup, verification scope, and known limits.
 
 Keep the session outside the target repository and this checkout. Review the stop reason, open questions, permissions, and acceptance receipts; exit code 0 alone does not mean completion. The `orvant proje` command is experimental.
 
@@ -94,10 +112,14 @@ Give a file-capable agent [`skills/orvant/SKILL.md`](skills/orvant/SKILL.md) and
 
 The beta covers intake, planning, execution, diagnosis, and continuation. Acceptance depends on the contract and oracle quality; it does not establish general semantic correctness. User answers, contract approval, and permission decisions belong to the real user. Review plans and permissions before execution. Project-record scripts make no network requests themselves, but an agent reading files remains subject to its provider's data-handling rules.
 
+**Windows security limit:** on Windows the oracle runs inside the Codex sandbox (elevated mode). It blocks writes outside the gate tree and outbound TCP, but DNS lookups can still leave the sandbox through the system DNS service, and the sandbox can read the whole disk. The oracle script itself has no network access, yet a worker program it runs could leak data over DNS. Linux has no such channel. Run untrusted worker output on a machine or account without secrets. Details: [docs/WINDOWS.md](docs/WINDOWS.md).
+
 ## Documentation
 
 | Guide | Language |
 |---|---|
+| [Windows setup and limits](docs/WINDOWS.md) | English |
+| [Windows kurulumu ve sınırlar](docs/WINDOWS.tr.md) | Turkish |
 | [Engine (Turkish)](docs/MOTOR.md) | Turkish |
 | [Usage and project records (Turkish)](docs/KULLANIM.md) | Turkish |
 | [FAQ (Turkish)](docs/SSS.md) | Turkish |

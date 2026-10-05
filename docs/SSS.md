@@ -24,7 +24,7 @@ Mevcut planı sürdürür. İlk karşılama, gerçek sorular, sözleşme revizyo
 
 ## Hangi ortam gerekiyor?
 
-Kayıt runtime'ı Python 3.10+ ile Linux, macOS ve Windows için hazırlanmıştır. Motor Python 3.11+, Git ve gerçek koşuda Codex CLI goal/sandbox desteği ister. Motor Linux'ta geliştirilmiştir; diğer işletim sistemleri veya farklı Codex sürümleri için doğrulanmış uyumluluk iddiası yoktur.
+Kayıt runtime'ı Python 3.10+ ile Linux, macOS ve Windows için hazırlanmıştır. Motor Python 3.11+, Git ve gerçek koşuda Codex CLI goal/sandbox desteği ister. Motor Linux'ta geliştirilmiştir (`codex-cli 0.155.1`); Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` yerel olarak doğrulandı. Diğer Windows sürümleri, diğer Codex CLI sürümleri ve macOS için doğrulanmış uyumluluk iddiası yoktur.
 
 ## Veriler nereye gidiyor?
 
@@ -40,4 +40,4 @@ Dosya hash'i ve manifest, hangi dayanağın incelendiğini ve sonradan değişip
 
 ## Beta bugün ne için uygun?
 
-Kayıt tarafı kararları ve değişimin etkisini açıkça izlemek gereken yerel projelere yöneliktir. Motorun başlangıç kapsamı küçük Python CLI'ları, veri otomasyonu ve dar depo bakımıdır. Genel otonom proje tamamlama, her alanda güvenilirlik veya ölçülmüş zaman kazancı vaat edilmez.
+Kayıt tarafı kararları ve değişimin etkisini açıkça izlemek gereken yerel projelere yöneliktir. Motorun başlangıç kapsamı küçük Python CLI'ları, veri otomasyonu ve dar depo bakımıdır. Genel otonomluk, gerçek model başarısı veya ölçülmüş zaman kazancı vaat edilmez.

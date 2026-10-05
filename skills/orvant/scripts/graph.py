@@ -14,6 +14,8 @@ import re
 import subprocess
 import tokenize
 
+import core
+
 EXTENSIONS = {'.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'}
 IGNORED = {'.git', 'node_modules', 'dist', 'build', '__pycache__', '.venv', '.project'}
 PREFIX = 'code-graph:'
@@ -50,7 +52,7 @@ def _symlink_below(root, path):
     """Kökün üstündeki platform symlink/junction'larını güvenlik kapsamına alma."""
     current = path
     while current != root:
-        if current.is_symlink():
+        if core.is_link(current):
             return True
         parent = current.parent
         if parent == current:
@@ -125,12 +127,12 @@ def _files(root, include, exclude, max_files, metadata=False):
         for directory, dirs, names in os.walk(root, followlinks=False):
             folder = Path(directory)
             ignore = folder / '.gitignore'
-            if ignore.is_file() and not ignore.is_symlink():
+            if ignore.is_file() and not core.is_link(ignore):
                 base = folder.relative_to(root).as_posix()
                 rules.extend((base, line.rstrip()) for line in ignore.read_text(encoding='utf-8').splitlines()
                              if line.rstrip() and not line.startswith('#'))
             dirs[:] = sorted(d for d in dirs if d not in IGNORED
-                             and not (folder / d).is_symlink()
+                             and not core.is_link(folder / d)
                              and not _ignored((folder / d).relative_to(root).as_posix(), rules, True))
             candidates.extend(folder / name for name in sorted(names)
                               if not _ignored((folder / name).relative_to(root).as_posix(), rules, False))

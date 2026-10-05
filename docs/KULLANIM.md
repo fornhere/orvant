@@ -6,7 +6,9 @@ Orvant iki ayrı yol sunar: yerel proje kaydı için skill ve yazılım yürütm
 
 ## 1. Motoru kur
 
-Linux'ta Python **3.11+** ve Git ile deponun kökünden:
+Python **3.11+**, Git ve gerçek koşuda Codex CLI kimlik doğrulaması, goal desteği ve `codex sandbox` gerekir. Motor Linux'ta geliştirilmiştir (`codex-cli 0.155.1`); Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` yerel olarak doğrulandı. Diğer Windows sürümleri, diğer Codex CLI sürümleri ve macOS doğrulanmış sayılmaz.
+
+Linux'ta:
 
 ```sh
 python3 -m venv .venv
@@ -15,7 +17,17 @@ python3 -m pip install .
 orvant --help
 ```
 
-Gerçek koşu için Codex CLI kimlik doğrulaması, goal desteği ve `codex sandbox` gerekir. Motor `codex-cli 0.155.1` temel alınarak geliştirilmiştir; başka sürümler ve macOS/Windows motor davranışı doğrulanmış sayılmaz. Skill dosyaları wheel'den ayrı dağıtılır.
+Windows'ta sandbox kullanıcısı kullanıcı profilinizdeki Python'u çalıştıramaz, bu yüzden önce herkesçe okunabilir bir Python kopyası kurulmalıdır:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+py -3 -m pip install .
+py -3 -m orvant_op.mimar.yalitim_windows kur
+py -3 -m orvant_op --help
+```
+
+Skill dosyaları wheel'den ayrı dağıtılır.
 
 ## 2. Yeni motor oturumu
 
@@ -27,6 +39,8 @@ orvant karsila ilerle "<motor-oturumu>"
 orvant karsila durum "<motor-oturumu>"
 orvant karsila sorular "<motor-oturumu>"
 ```
+
+Windows'ta aynı komutları `py -3 -m orvant_op ...` veya `python ...` ile çalıştırabilirsiniz.
 
 Gerçek kaynaklar için `baslat` komutuna `--kaynak "<kaynak-yolu>"` eklenebilir. `ilerle` tek otomatik adım yürütür ve model çağırabilir; çıktıyı okuyup gerekli otomatik adımlarda tekrar çağır. Soruları gerçek kullanıcıya taşı ve cevapları gerçek soru kimliğiyle kaydet. Sözleşmeyi `orvant karsila sozlesme "<motor-oturumu>"` ile incele.
 

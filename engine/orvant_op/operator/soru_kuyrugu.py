@@ -4,11 +4,12 @@ import copy
 import hashlib
 import json
 import os
-import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
+from orvant_op.uyum_komut import orvant_komutu
 from orvant_op.yurutme import s4_kancasi
 from orvant_op.bagimli_ciktilar import bekleme_ciktilari, istenen_ciktilar
 from orvant_op.yurutme.zamanlayici import bagimli_kapanisi
@@ -40,11 +41,11 @@ def atomik_yaz(yol, metin):
     yol.parent.mkdir(parents=True, exist_ok=True)
     gecici = None
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=yol.parent,
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=yol.parent,
                                          delete=False) as dosya:
             gecici = Path(dosya.name)
             dosya.write(metin)
-        os.replace(gecici, yol)
+        uyum.degistir(gecici, yol)
     finally:
         if gecici is not None:
             gecici.unlink(missing_ok=True)
@@ -333,8 +334,8 @@ class SoruKuyrugu:
         s["kok"] = kok_bul(s)
         s["id"] = "S-" + hashlib.sha256(s["kok"].encode()).hexdigest()[:10]
         if tur in ("karar", "girdi"):
-            s["hazir_komut"] = (f"python3 -m orvant_op.operator cevapla {shlex.quote(str(self.calisma))} "
-                                 f'{s["id"]} "<cevabınız>"')
+            s["hazir_komut"] = (orvant_komutu(["cevapla", self.calisma, s["id"]], modul="orvant_op.operator")
+                                + ' "<cevabınız>"')
         return tamamla(s)
 
     def baglamla(self, soru, plan, kararlar, yetkiler):

@@ -1,8 +1,6 @@
 """Temiz profilli işçi sarmalayıcısı: codex exec (varsayılan) ya da claude -p (B-Y); yürütücü testte enjekte edilir."""
 import errno
 import json
-import os
-import signal
 import shlex
 import re
 import subprocess
@@ -12,7 +10,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import ayarlar
+from . import ayarlar, uyum_komut, uyum_surec
 from .iz import kaydet
 
 WORKER_CLEAN_PREAMBLE = (
@@ -50,18 +48,24 @@ def komut_argv(komut):
     lexer.commenters = ""
     try:
         parcalar = list(lexer)
+        tek_tirnak = False
         for parca in parcalar:
+            if uyum_surec.WINDOWS and parca.startswith("'"):
+                tek_tirnak = True  # cmd.exe tek tırnağı yorumlamaz; Git Bash gerekir
             if parca.startswith("'"):
                 continue
             ozel = "$`" if parca.startswith('"') else "|&;<>$`()*?[]{}~#"
             islec = next((c for c in parca if c in ozel), None)
             if islec:
                 break
+        if not islec and tek_tirnak:
+            islec = "tek tırnak"
         if not islec and "\n" in komut:
             islec = "satır sonu"
         if not islec and parcalar and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", parcalar[0]):
             islec = "ortam ataması"
-        argv = shlex.split(komut)
+        # Windows'ta ters eğik çizgi yol ayırıcıdır; POSIX shlex'i C:\yol'u bozar.
+        argv = uyum_komut.bol(komut)
         if not islec and argv and argv[0] in {
                 "cd", "exit", "export", "unset", "read", "eval", "exec", ".", ":",
                 "source", "set", "trap", "umask", "wait", "if", "for", "while", "case", "!",
@@ -77,109 +81,82 @@ def komut_argv(komut):
         # Sözdizimi hatası da önceki gibi kabuğun çıkış koduyla reddedilir.
         islec, argv = "kabuk sözdizimi", []
     if islec:
-        return ["/bin/sh", "-c", komut], "kabuk gerekli: " + islec
+        return uyum_surec.kabuk_argv(komut), "kabuk gerekli: " + islec + _kabuk_notu()
     return argv, None
+
+
+def _kabuk_notu():
+    """Windows'ta hangi kabuğun seçildiği iz gerekçesine yazılır; POSIX'te boş (metin değişmez)."""
+    return f" (kabuk: {uyum_surec.kabuk_adi()})" if uyum_surec.WINDOWS else ""
 
 
 def kabuk_geri_dususu(exc, argv, komut):
     """Yalnız hedef ikilinin başlatma hatasında eski sh -c davranışını koru."""
     if exc.filename == argv[0] and exc.errno in (errno.ENOEXEC, errno.ENOENT):
         neden = "çalıştırılabilir biçim yok" if exc.errno == errno.ENOEXEC else "komut bulunamadı"
-        return ["/bin/sh", "-c", komut], "kabuk geri düşüşü: " + neden
+        return uyum_surec.kabuk_argv(komut), "kabuk geri düşüşü: " + neden + _kabuk_notu()
     raise exc
 
 
 def grup_run(komut, *, input=None, capture_output=True, text=True, timeout=None, cwd=None, shell=False, env=None):
     """subprocess.run eşdeğeri; zaman aşımında yalnız codex'i değil süreç grubunu sonlandırır (G-102).
 
-    Yeni oturumdaki gruba terminalin Ctrl-C'si ulaşmaz; kesintide de grup sonlandırılır (G-145)."""
-    proc = subprocess.Popen(komut, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE if capture_output else None,
-                            stderr=subprocess.PIPE if capture_output else None,
-                            text=text, start_new_session=True, cwd=cwd, shell=shell, env=env)
+    Yeni oturumdaki gruba terminalin Ctrl-C'si ulaşmaz; kesintide de grup sonlandırılır (G-145).
+    Windows'ta grup bir Job Object'tir (torunlar dahil tüm ağaç ölür, bkz. uyum_surec)."""
+    # POSIX'te subprocess'un eski varsayılan kodlaması aynen kalsın.
+    kw = {"encoding": "utf-8", "errors": "replace"} if uyum_surec.WINDOWS and text else {}
     try:
-        kanca = getattr(_kanca, "fn", None)
-        if kanca:
-            kanca(proc.pid)
-        cikti, hata = proc.communicate(input, timeout=timeout)
-    except BaseException:  # zaman aşımı, Ctrl-C ya da kanca hatası: grup yetim kalmasın
+        proc = uyum_surec.grup_baslat(komut if shell else uyum_surec.cozumle_argv(komut),
+                                      stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE if capture_output else None,
+                                      stderr=subprocess.PIPE if capture_output else None,
+                                      text=text, cwd=cwd, shell=shell, env=uyum_surec.ortam(env), **kw)
+    except OSError as exc:
+        # Windows başlatma hataları filename taşımaz; çağıranlar `exc.filename == argv[0]` ile ayırt eder.
+        if uyum_surec.WINDOWS and exc.filename is None and not shell and isinstance(komut, (list, tuple)) and komut:
+            exc.filename = str(komut[0])
+        raise
+    try:
         try:
-            os.killpg(proc.pid, signal.SIGTERM)
+            kanca = getattr(_kanca, "fn", None)
+            if kanca:
+                kanca(proc.pid)
+            cikti, hata = proc.communicate(input, timeout=timeout)
+        except BaseException:  # zaman aşımı, Ctrl-C ya da kanca hatası: grup yetim kalmasın
+            uyum_surec.grup_oldur(proc)
             try:
-                proc.wait(timeout=2)
+                proc.communicate(timeout=5)  # gruptan kaçmış torun boruyu açık tutarsa bekleme sınırlı
             except subprocess.TimeoutExpired:
                 pass
-            os.killpg(proc.pid, signal.SIGKILL)  # SIGTERM'i yok sayan torunlar da kalmasın
-        except ProcessLookupError:
-            pass
-        try:
-            proc.communicate(timeout=5)  # gruptan kaçmış torun boruyu açık tutarsa bekleme sınırlı
-        except subprocess.TimeoutExpired:
-            pass
-        raise
+            raise
+    finally:
+        uyum_surec.grup_birak(proc)  # Windows: job tutamağı kapanır, artakalan torun kalmaz
     return subprocess.CompletedProcess(komut, proc.returncode, cikti, hata)
 
 
 def surec_baslangici(pid):
-    """/proc/<pid>/stat başlangıç zamanı; süreç yoksa None (PID yeniden kullanımı denetimi)."""
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-    except OSError:
-        return None
-    return stat.rsplit(")", 1)[1].split()[19]
+    """/proc/<pid>/stat başlangıç zamanı (Windows: GetProcessTimes); süreç yoksa None (PID yeniden kullanımı denetimi)."""
+    return uyum_surec.surec_baslangici(pid)
 
 
-def grup_canli(pgid):
+def grup_canli(pgid, baslangic=None):
     """Grupta çalışabilir süreç var mı; toplanmayan zombileri canlı sayma."""
-    proc = Path("/proc")
-    if proc.is_dir():
-        for yol in proc.iterdir():
-            if not yol.name.isdigit():
-                continue
-            try:
-                alanlar = (yol / "stat").read_text().rsplit(")", 1)[1].split()
-                if int(alanlar[2]) == pgid and alanlar[0] != "Z":
-                    return True
-            except (OSError, ValueError, IndexError):
-                continue
-        return False
-    try:
-        os.killpg(pgid, 0)
-        return True
-    except ProcessLookupError:
-        return False
+    return uyum_surec.grup_canli(pgid, baslangic)
 
 
-def _grup_bitti(pgid, sure):
-    son = time.monotonic() + sure
-    while True:
-        if not grup_canli(pgid):
-            return True
-        if time.monotonic() >= son:
-            return False
-        time.sleep(0.05)
+def _grup_bitti(pgid, sure, baslangic=None):
+    return uyum_surec._grup_bitti(pgid, sure, baslangic)
 
 
 def grup_durdur(pgid, baslangic, *, bekleme=5.0):
-    """Kayıtlı işçi grubunu SIGTERM, gerekirse SIGKILL ile durdurur (G-105).
+    """Kayıtlı işçi grubunu SIGTERM, gerekirse SIGKILL ile durdurur (G-105); Windows'ta job sonlandırılır.
 
     Lider yaşıyor ama başlangıcı uyuşmuyorsa PID başka sürecindir; dokunmaz. Lider ölüyse
     pgid, grupta süreç kaldıkça yeniden kullanılamaz; killpg güvenlidir."""
     guncel = surec_baslangici(pgid)
     if guncel is not None and guncel != baslangic:
         return {"pgid": pgid, "durduruldu": False, "neden": "PID başka sürece ait (başlangıç uyuşmuyor)"}
-    for sinyal, sure in ((signal.SIGTERM, bekleme), (signal.SIGKILL, 2.0)):
-        try:
-            os.killpg(pgid, sinyal)
-        except ProcessLookupError:
-            if sinyal == signal.SIGKILL:  # SIGTERM beklemesinin hemen ardından bitti
-                return {"pgid": pgid, "durduruldu": True, "sinyal": "SIGTERM"}
-            return {"pgid": pgid, "durduruldu": False, "neden": "süreç grubu zaten bitmiş"}
-        except PermissionError:
-            return {"pgid": pgid, "durduruldu": False, "neden": "sinyal izni yok"}
-        if _grup_bitti(pgid, sure):
-            return {"pgid": pgid, "durduruldu": True, "sinyal": sinyal.name}
-    return {"pgid": pgid, "durduruldu": False, "neden": "SIGKILL sonrası grup hâlâ var"}
+    return uyum_surec.grup_durdur(pgid, bekleme, baslangic)
 
 
 class YurutucuHatasi(RuntimeError):

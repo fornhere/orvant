@@ -6,6 +6,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
 from .kehanet import karar_yollari, kehanet_yolu, sozlesme_yolu, kabul_degisiklikleri
 
 MEDYA_UZANTILARI = frozenset("mp4 mov mkv webm avi m4v mts m2ts mpg mpeg mp3 wav flac aac m4a ogg opus wma aiff aif ogv ts".split())
@@ -29,7 +30,7 @@ def baglari_yaz(calisma, veri):
             gecici = Path(fh.name)
             json.dump(veri, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
-        os.replace(gecici, yol)
+        uyum.degistir(gecici, yol)
     finally:
         if gecici is not None:
             gecici.unlink(missing_ok=True)

@@ -13,6 +13,7 @@ import sys
 import tempfile
 
 from orvant_op.ayarlar import depo_koku, proje_kaydi_script
+from orvant_op import uyum
 from orvant_op.karsilama.sozlesme import _spec_govdesi
 from .dogrulama import dogrula
 
@@ -132,11 +133,13 @@ def _hedef(kok, calisma):
     """Depo kontrolündeki dar kök ilkesini korur; git yazımı istemez."""
     ham = Path(os.path.abspath(Path(kok).expanduser()))
     for parca in (ham, *ham.parents):
-        if parca.is_symlink():
+        if uyum.baglanti_mi(parca):
             raise ValueError('hedef kökte sembolik bağ kullanılamaz')
     hedef = ham.resolve()
     ev = Path.home().resolve()
-    yasaklar = (depo_koku(), Path(calisma).resolve(), ev / '.ssh', ev / '.gnupg', ev / '.config')
+    from .envanter import hassas_ev_kokleri, ev_kapi_kokleri, sistem_kokleri
+    yasaklar = (depo_koku(), Path(calisma).resolve(), *hassas_ev_kokleri(ev),
+                *ev_kapi_kokleri(ev), *sistem_kokleri())
     if (hedef in (ev, Path(hedef.anchor)) or '.git' in hedef.parts or '.project' in hedef.parts
             or any(hedef.is_relative_to(p) for p in yasaklar)):
         raise ValueError('hedef proje kökü güvenli kapsam dışında')
@@ -145,7 +148,8 @@ def _hedef(kok, calisma):
     ust = hedef if hedef.exists() else hedef.parent
     while not ust.exists():
         ust = ust.parent
-    proc = subprocess.run(['git', '-C', str(ust), 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+    proc = subprocess.run(['git', '-C', str(ust), 'rev-parse', '--show-toplevel'],
+                          capture_output=True, text=True, encoding='utf-8', errors='replace')
     if proc.returncode == 0 and Path(proc.stdout.strip()).resolve() != hedef:
         raise ValueError('hedef başka bir git deposunun içinde; kök değil')
     return hedef
@@ -157,7 +161,8 @@ def _script():
 
 def _calistir(argv, *, veri=None):
     sonuc = subprocess.run(argv, input=metin(veri) if veri is not None else None,
-                           capture_output=True, text=True, env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+                           capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
     if sonuc.returncode:
         try:
             hata = json.loads(sonuc.stdout)['error']
@@ -275,7 +280,7 @@ def aktar(calisma, kok, *, kuru=False):
     spec, ozet = donustur(sozlesme, plan)
     state_yolu = hedef / '.project/state.json'
     if (hedef / '.project').exists():
-        if (hedef / '.project').is_symlink() or state_yolu.is_symlink():
+        if uyum.baglanti_mi(hedef / '.project') or uyum.baglanti_mi(state_yolu):
             raise ValueError('proje kaydında sembolik bağ kullanılamaz')
         mevcut = _oku(state_yolu)
         olaylar = olaylari_uret(spec, mevcut)

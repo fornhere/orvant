@@ -2,7 +2,6 @@
 import argparse
 import copy
 from datetime import datetime, timezone
-import fcntl
 import json
 import math
 import os
@@ -18,7 +17,7 @@ except ModuleNotFoundError:  # `python3 orvant_gelisim/kayit.py` betik olarak ç
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from orvant_gelisim import projeler
 
-from orvant_op import ayarlar
+from orvant_op import ayarlar, uyum
 ROOT = Path(__file__).resolve().parents[1]
 CEKIRDEK = ayarlar.cekirdek_yolu()
 OPERATOR = ("hedef_netlestirme", "karar_belgesi", "is_bolme", "brief_yazma",
@@ -142,13 +141,14 @@ def yaz(yol, item):
     denetle(item)
     # Serileştirme açılıştan önce: reddedilen olay boş dosya bırakmasın (G-149).
     satir = json.dumps(item, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
-    with Path(yol).open("a", encoding="utf-8") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+    # newline="\n": Windows'ta metin kipi `\n`'i `\r\n` yapıp izi (ve hash'i) bozmasın.
+    with Path(yol).open("a", encoding="utf-8", newline="\n") as fh:
+        uyum.kilitle(fh)
         try:
             fh.write(satir)
             fh.flush()
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            uyum.kilit_birak(fh)
 
 
 def olay_kokeni_ekle(item, surum=None):
@@ -183,7 +183,8 @@ def surum_coz(kok=ROOT, cekirdek=CEKIRDEK):
     def sha(path):
         try:
             sonuc = subprocess.run(["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
-                                   capture_output=True, text=True, timeout=5)
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=5)
         except FileNotFoundError:
             return None, "git bulunamadı"
         except subprocess.TimeoutExpired:
@@ -203,7 +204,7 @@ def surum_coz(kok=ROOT, cekirdek=CEKIRDEK):
         durum = subprocess.run(
             ["git", "-C", str(kok), "status", "--porcelain", "--untracked-files=all", "--",
              "orvant_op/", ":(glob)orvant_gelisim/*.py", "orvant_gelisim/sema/"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
         kirli = durum.returncode == 0 and bool(durum.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
         pass  # Kirlilik bilgisi alınamasa da çözülen sürüm ve gerekçesi korunur.
@@ -311,7 +312,18 @@ def ozet_yaz(dosyalar):
           f"onbellek_token={totals[1]} | cikti_token={totals[2]}")
 
 
+def _konsol_utf8():
+    # Windows'ta borulu stdout/stderr yerel kodlamayı (cp1254) kullanır; kodlanamayan karakter çökertmesin.
+    if uyum.WINDOWS:
+        for akim in (sys.stdout, sys.stderr):
+            try:
+                akim.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
+
+
 def main():
+    _konsol_utf8()
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="komut", required=True)
     add = sub.add_parser("ekle")

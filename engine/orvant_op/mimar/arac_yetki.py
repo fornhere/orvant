@@ -4,12 +4,13 @@ import os
 import re
 from pathlib import Path
 
+from orvant_op import uyum
 try:
     import pwd
 except ImportError:  # Windows gibi pwd modülü olmayan sistemler.
     pwd = None
 
-from .envanter import gereksinim_cikar
+from .envanter import gereksinim_cikar, hassas_ev_kokleri, ev_kapi_kokleri, sistem_kokleri
 
 
 GENEL_KELIMELER = frozenset({
@@ -110,17 +111,29 @@ def eslesmeler(gorev, kayitlar):
 
 def _genislet(yol, ev):
     yol = yol.replace("$HOME/", "~/", 1)
+    if uyum.WINDOWS:
+        for onek in ("%USERPROFILE%", "$env:USERPROFILE"):
+            if yol.casefold().startswith((onek + "\\").casefold()) or yol.casefold().startswith((onek + "/").casefold()):
+                yol = "~/" + yol[len(onek) + 1:]
+                break
+        yol = yol.replace("~\\", "~/", 1)
     return Path(os.path.normpath(ev / yol[2:] if yol.startswith("~/") else ev if yol == "~" else yol))
 
 
 def _anilan_yollar(metin, ev):
     # Sözcük sınırı /uv ile /uvx'i karıştırmaz; tırnaklı boşluklu yollar da korunur.
-    desen = r'''["'`]((?:~/|\$HOME/|/)[^"'`]+)["'`]|(?<![\w/:])((?:~/|\$HOME/|/)[^\s,;:()\[\]{}<>"'`]+)'''
+    kok = r"(?:~/|\$HOME/|/)"
+    if uyum.WINDOWS:
+        kok = r"(?:~[/\\]|\$HOME[/\\]|%USERPROFILE%[/\\]|\$env:USERPROFILE[/\\]|[A-Za-z]:[/\\]|/)"
+    desen = r'''["'`](''' + kok + r'''[^"'`]+)["'`]|(?<![\w/:])(''' + kok + r'''[^\s,;()\[\]{}<>"'`]+)'''
     return [_genislet(a or b.rstrip(".!?"), ev) for a, b in re.findall(desen, metin)]
 
 
 def _yol_karsilandi(yol, anilanlar):
     # Y06 emsali: belirli model alt dizini, genel önbellek isteğini de karşılar.
+    if uyum.WINDOWS:
+        yol = yol.resolve(strict=False)
+        anilanlar = [a.resolve(strict=False) for a in anilanlar]
     return any(yol == a or yol.is_relative_to(a) or a.is_relative_to(yol) for a in anilanlar)
 
 
@@ -170,9 +183,9 @@ def _onerilen_yol(yol, ev):
     # izin_yolu_dogrula'nın depo verilmemiş kuralı; sentetik ev açıkça taşınır.
     hedef, ev = yol.resolve(), ev.resolve()
     orvant = Path(__file__).resolve().parents[2]
-    yasak = (ev / ".ssh", ev / ".gnupg", orvant)
+    yasak = (*hassas_ev_kokleri(ev), *sistem_kokleri(), orvant)
     if (not yol.is_absolute() or not hedef.is_relative_to(ev) or hedef == ev or
-            hedef == ev / ".config" or any(hedef.is_relative_to(k) for k in yasak)):
+            hedef in ev_kapi_kokleri(ev) or any(hedef.is_relative_to(k) for k in yasak)):
         return None
     return str(hedef)
 

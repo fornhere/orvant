@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from link_helpers import sembolik_bag_olustur
 
 from fixtures import build_spec, event, evidence_items, write_artifacts
 
@@ -283,7 +284,7 @@ class WorkflowTests(ProjectCase):
         self.apply("start_task", task_id="T-DATA")
         outside = self.root.parent / "outside.txt"
         outside.write_text("outside", encoding="utf-8")
-        (self.root / "escape.txt").symlink_to(outside)
+        sembolik_bag_olustur(self.root / "escape.txt", outside)
         (self.root / ".project").mkdir()
         (self.root / ".project" / "state.json").write_text("{}", encoding="utf-8")
         for path in [str(outside), "../outside.txt", "escape.txt", ".project/state.json", "missing.txt", "."]:
@@ -356,7 +357,7 @@ class CLITests(ProjectCase):
         target.rmdir()
         outside = self.root.parent / "outside"
         outside.mkdir()
-        target.symlink_to(outside, target_is_directory=True)
+        sembolik_bag_olustur(target, outside, dizin=True)
         self.cli("init", self.root, "--spec", self.spec, success=False)
         self.assertEqual(list(outside.iterdir()), [])
 

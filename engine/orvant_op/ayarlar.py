@@ -5,7 +5,8 @@
      ``ORVANT_CODEX``, ``ORVANT_DEPO``, ``ORVANT_CEKIRDEK``.
   2. ``orvant.toml``: ``ORVANT_AYAR`` açık dosyası varsa o, yoksa çalışma dizininden
      köke doğru ilk ``orvant.toml`` (proje); ardından
-     ``$XDG_CONFIG_HOME/orvant/orvant.toml`` (varsayılan ``~/.config/orvant/``, kullanıcı).
+     ``$XDG_CONFIG_HOME/orvant/orvant.toml`` (varsayılan ``~/.config/orvant/``, kullanıcı;
+     Windows'ta önce ``%APPDATA%/orvant/orvant.toml``).
      Proje dosyası kullanıcı dosyasını anahtar anahtar ezer.
   3. Varsayılan (bütün roller için gpt-6.1-sol).
 
@@ -23,7 +24,7 @@ Dosya biçimi::
     tur = "claude"
 
     [kehanet]
-    yalitim = "auto"         # auto | bwrap | codex
+    yalitim = "auto"         # auto | bwrap | codex (Windows'ta bwrap yok; auto = codex sandbox)
 
     [yollar]                   # göreli yol, dosyanın bulunduğu dizine göredir
     depo = "."
@@ -43,16 +44,17 @@ Dosya biçimi::
       {proje = "ornek", yol = "../oturumlar/ornek-*"},
     ]
 
-Modül yalnız standart kitaplığı kullanır ve orvant_op/orvant_gelisim içinden hiçbir şey
-içe aktarmaz; böylece her katman (orvant_gelisim.kayit dahil) döngüsüz kullanabilir.
+Modül yalnız standart kitaplığı kullanır ve orvant_op/orvant_gelisim içinden yalnızca
+yaprak ``uyum_surec`` modülünü (o da yalnız standart kitaplık) içe aktarır; böylece her katman (orvant_gelisim.kayit dahil) döngüsüz kullanabilir.
 Çağrı yerleri bu modülden çalışma anında çözülür.
 """
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
 import tomllib
+
+from . import uyum_surec
 
 # Rol → varsayılan model. Model adları ortam veya orvant.toml ile değiştirilebilir.
 ROLLER = {
@@ -84,10 +86,12 @@ def _metin(deger, ad):
 
 def _oku(yol):
     try:
-        with Path(yol).open("rb") as fh:
-            veri = tomllib.load(fh)
+        # Windows not defteri BOM yazabilir; utf-8-sig ikisini de okur (tomllib BOM'u reddeder).
+        veri = tomllib.loads(Path(yol).read_bytes().decode("utf-8-sig"))
     except OSError as exc:
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise AyarHatasi(f"ayar dosyası UTF-8 değil: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
     for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon", "olcer", "kat"):
@@ -107,9 +111,16 @@ def _proje_dosyasi(baslangic=None):
 
 def _kullanici_dosyasi():
     xdg = os.environ.get("XDG_CONFIG_HOME")
-    kok = Path(xdg) if xdg else Path.home() / ".config"
-    yol = kok / "orvant" / DOSYA_ADI
-    return yol if yol.is_file() else None
+    kokler = [Path(xdg)] if xdg else []
+    if uyum_surec.WINDOWS and not xdg and os.environ.get("APPDATA"):
+        kokler.append(Path(os.environ["APPDATA"]))  # Windows kullanıcı yapılandırması
+    if not xdg:
+        kokler.append(Path.home() / ".config")  # Windows'ta Path.home() USERPROFILE'dır
+    for kok in kokler:
+        yol = kok / "orvant" / DOSYA_ADI
+        if yol.is_file():
+            return yol
+    return None
 
 
 def ayar_dosyalari(baslangic=None):
@@ -172,13 +183,28 @@ def model(rol, baslangic=None):
     return model_kaynakli(rol, baslangic)[0]
 
 
+def _ikili_metni(deger, ad):
+    """İkili adı/yolu: POSIX'te boşluksuz metin; Windows'ta yol boşluk içerebilir (Program Files)."""
+    if (uyum_surec.WINDOWS and isinstance(deger, str) and deger and deger.strip() == deger
+            and not any(c in deger for c in "\r\n\t")):
+        return deger
+    return _metin(deger, ad)
+
+
+def _ikili_coz(deger):
+    """Windows'ta `.exe`/`.cmd`/`.ps1` (PATHEXT) tam yola çözülür; çözülemezse ad aynen döner.
+    POSIX'te değiştirilmez. `yurutucu.grup_run` .cmd/.ps1'i çalıştırılabilir biçime çevirir."""
+    return (uyum_surec.ikili_yolu(deger) or deger) if uyum_surec.WINDOWS else deger
+
+
 def codex_ikili_kaynakli(baslangic=None):
     if os.environ.get("ORVANT_CODEX"):
-        return _metin(os.environ["ORVANT_CODEX"], "ORVANT_CODEX"), "ortam:ORVANT_CODEX"
+        return (_ikili_coz(_ikili_metni(os.environ["ORVANT_CODEX"], "ORVANT_CODEX")),
+                "ortam:ORVANT_CODEX")
     deger, dosya = _dosyadan("codex", "ikili", baslangic)
     if deger is not None:
-        return _metin(deger, f"{dosya} [codex].ikili"), str(dosya)
-    return CODEX_IKILI, "varsayilan"
+        return _ikili_coz(_ikili_metni(deger, f"{dosya} [codex].ikili")), str(dosya)
+    return _ikili_coz(CODEX_IKILI), "varsayilan"
 
 
 def codex_ikili(baslangic=None):
@@ -199,7 +225,7 @@ def yurutucu_turu_kaynakli(baslangic=None):
         if deger is None:
             bulunan = [tur for tur, ikili in (("codex", codex_ikili(baslangic)),
                                                ("claude", claude_ikili(baslangic)))
-                       if shutil.which(ikili)]
+                       if uyum_surec.ikili_yolu(ikili)]
             secim = ("ORVANT_YURUTUCU=codex|claude ya da orvant.toml [yurutucu] "
                      "tur=... ile seç; komut: export ORVANT_YURUTUCU=claude "
                      "(kaynak: otomatik algılama)")
@@ -220,22 +246,30 @@ def yurutucu_turu(baslangic=None):
 
 
 def kehanet_yalitimi(baslangic=None):
-    """Kehanet OS yalıtım arka ucu: ``auto``, ``bwrap`` veya ``codex``."""
+    """Kehanet OS yalıtım arka ucu: ``auto``, ``bwrap`` veya ``codex``.
+
+    Windows'ta bwrap yoktur: ``bwrap`` ayarı hata verir, ``auto`` doğrudan ``codex`` (Windows kısıtlı
+    token sandbox'ı) döner; yalıtım yoklaması yine kehanet.py'de kanıtlanır, kanıtlanamazsa kapı kapalıdır."""
     deger, dosya = _dosyadan("kehanet", "yalitim", baslangic)
     if deger is None:
-        return "auto"
-    if deger not in ("auto", "bwrap", "codex"):
+        deger = "auto"
+    elif deger not in ("auto", "bwrap", "codex"):
         raise AyarHatasi(f"{dosya} [kehanet].yalitim auto|bwrap|codex olmalı: {deger!r}")
+    if uyum_surec.WINDOWS:
+        if deger == "bwrap":
+            raise AyarHatasi(f"{dosya} [kehanet].yalitim='bwrap' Windows'ta kullanılamaz (bwrap Linux'a özgü): auto|codex")
+        return "codex"
     return deger
 
 
 def claude_ikili_kaynakli(baslangic=None):
     if os.environ.get("ORVANT_CLAUDE"):
-        return _metin(os.environ["ORVANT_CLAUDE"], "ORVANT_CLAUDE"), "ortam:ORVANT_CLAUDE"
+        return (_ikili_coz(_ikili_metni(os.environ["ORVANT_CLAUDE"], "ORVANT_CLAUDE")),
+                "ortam:ORVANT_CLAUDE")
     deger, dosya = _dosyadan("claude", "ikili", baslangic)
     if deger is not None:
-        return _metin(deger, f"{dosya} [claude].ikili"), str(dosya)
-    return CLAUDE_IKILI, "varsayilan"
+        return _ikili_coz(_ikili_metni(deger, f"{dosya} [claude].ikili")), str(dosya)
+    return _ikili_coz(CLAUDE_IKILI), "varsayilan"
 
 
 def claude_ikili(baslangic=None):
@@ -379,6 +413,9 @@ def proje_kaydi_script():
 def main(argv=None):
     """``python3 -m orvant_op.ayarlar``: etkin ayarları JSON olarak yazar."""
     del argv
+    for akis in (sys.stdout, sys.stderr):
+        if hasattr(akis, "reconfigure"):  # Windows konsol kodlaması Türkçe dışı karakterde çökmesin
+            akis.reconfigure(errors="replace")
     try:
         print(json.dumps(ozet(), ensure_ascii=False, indent=2))
     except AyarHatasi as exc:

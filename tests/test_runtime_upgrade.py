@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from link_helpers import sembolik_bag_olustur
 
 from fixtures import build_spec, write_artifacts
 
@@ -157,7 +158,7 @@ class RuntimeUpgradeTests(unittest.TestCase):
                 previous = target.read_bytes() if target.exists() else None
                 if target.exists():
                     target.unlink()
-                target.symlink_to(outside)
+                sembolik_bag_olustur(target, outside)
                 before = self.tree()
                 self.cli(expected=1)
                 self.assertEqual(self.tree(), before)

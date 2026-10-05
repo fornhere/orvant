@@ -64,33 +64,53 @@ flowchart LR
 Kodlama ajanı CLI’ı ve API anahtarı gerekmez. `init`, hedefte bir `AGENTS.md` dosyası oluşturur.
 
 ```sh
-git clone https://github.com/fornhere/orvant && cd orvant
-python3 skills/orvant/scripts/project.py init /tmp/orvant-demo --spec examples/demo-spec.json
-python3 /tmp/orvant-demo/.project/scripts/project.py context /tmp/orvant-demo
-python3 /tmp/orvant-demo/.project/scripts/project.py ontology /tmp/orvant-demo
+git clone https://github.com/fornhere/orvant.git
+cd orvant
+demo="$(mktemp -d)/demo"
+python3 skills/orvant/scripts/project.py init "$demo" --spec examples/demo-spec.json
+python3 "$demo/.project/scripts/project.py" context "$demo"
+python3 "$demo/.project/scripts/project.py" ontology "$demo"
 ```
 
 Çıktıda çalışmaya hazır `T-INCELE` görevini, önkoşul bekleyen `T-KONTROL` görevini ve nesne haritasını göreceksiniz.
 
 ## Kendi deponuzda çalıştırın
 
-Motor Linux, Git, Python 3.11+ ve kurulu, oturum açılmış **Codex CLI veya Claude Code (biri yeterli)** gerektirir. İkisi eşit desteklenir; hiçbiri varsayılan veya deneysel değildir. Motor `codex-cli 0.155.1` ile geliştirilmiştir; diğer sürümler doğrulanmadı ve Claude Code için doğrulanmış sürüm iddiası yoktur. macOS veya Windows motor davranışı doğrulanmadı.
+Motor Git, Python 3.11+ ve kurulu, oturum açılmış **Codex CLI veya Claude Code (biri yeterli)** gerektirir. İkisi eşit desteklenir; hiçbiri varsayılan veya deneysel değildir. Motor Linux'ta `codex-cli 0.155.1` ile geliştirilmiştir. Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` bu makinede yerel olarak doğrulandı; başka Windows sürümleri ve başka Codex CLI sürümleri doğrulanmadı. macOS doğrulanmadı.
 
 İşçi seçimi: `ORVANT_YURUTUCU=codex|claude`, `orvant.toml` içindeki `[yurutucu] tur = "codex"` veya `tur = "claude"` ayarından önceliklidir. İkisi de belirtilmezse PATH'te veya ayarlı yolunda kurulu tek ikili otomatik algılanır. İkisi de kuruluysa açık seçim zorunludur; aksi halde Orvant `iki yürütücü bulundu` hatası verir.
 
-Linux'ta kehanetin OS yalıtımı, seçilen işçiden bağımsız olarak bubblewrap (`bwrap`) veya Codex sandbox (`codex sandbox`) gerektirir. `orvant.toml` içindeki `[kehanet] yalitim = "auto"` önce doğrulanmış `bwrap`, sonra Codex sandbox dener; `yalitim = "bwrap"` veya `yalitim = "codex"` ilgili arka ucu zorlar. Kullanılabilir yalıtım arka ucu yoksa Orvant kehaneti çalıştırmaz: kapı kapanır, yalıtımsız koşmaz.
+Kehanetin OS yalıtımı Linux'ta bubblewrap (`bwrap`), Windows'ta Codex sandbox (`codex sandbox`) ister; seçilen işçiden bağımsızdır. `orvant.toml` içindeki `[kehanet] yalitim = "auto"` önce Linux'ta doğrulanmış `bwrap`'ı, sonra Codex sandbox dener; `yalitim = "bwrap"` veya `yalitim = "codex"` ilgili arka ucu zorlar. Kullanılabilir yalıtım arka ucu yoksa Orvant kehaneti çalıştırmaz: kapı kapanır, yalıtımsız koşmaz.
+
+Windows'ta sandbox kullanıcısı kullanıcı profilinizdeki Python'u çalıştıramaz, bu yüzden önce herkesçe okunabilir bir Python kopyası kurulmalıdır:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+py -3 -m pip install .
+py -3 -m orvant_op.mimar.yalitim_windows kur
+```
+
+Linux'ta:
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install .
+```
+
+Sonra her iki sistemde de:
+
+```sh
 orvant karsila baslat "<oturum>" --hedef "<hedef>"           # model çağrısı yok
 orvant karsila ilerle "<oturum>"                             # model çağırabilir
 orvant karsila sorular "<oturum>"                            # model çağrısı yok
-orvant karsila cevapla "<oturum>" "<soru-id>" "<cevap>"      # kullanıcı kararı
+orvant karsila cevapla "<oturum>" "<soru-kimligi>" "<cevap>"      # kullanıcı kararı
 orvant karsila onayla "<oturum>" "<revizyon>"                # kullanıcı kararı
 orvant mimar plan "<oturum>" --depo "<depo>"                # model çağırır
 orvant surdur "<oturum>" --kuru                              # işi yürütmez
 orvant surdur "<oturum>"                                    # model çağırabilir
 ```
+
+Windows'ta `orvant` PATH'te yoksa aynı komutları `py -3 -m orvant_op ...` veya `python ...` ile çalıştırabilirsiniz. Tam Windows kurulumu, doğrulama kapsamı ve bilinen sınırlar için [docs/WINDOWS.tr.md](docs/WINDOWS.tr.md) belgesine bakın.
 
 Oturumu hedef deponun ve bu kaynak ağacının dışında tutun. Sorulara gerçekten kullanıcı cevap vermeli ve yalnızca ekranda gösterilen sözleşme revizyonu onaylanmalıdır. `surdur` ilk karşılamayı ya da planı oluşturmaz. Bitiş nedenini, açık soruları, izinleri ve kabul makbuzlarını inceleyin; yalnızca sıfır çıkış kodu tamamlanma anlamına gelmez. `orvant proje` komutu deneyseldir.
 
@@ -106,10 +126,14 @@ Beta; karşılama, planlama, yürütme, teşhis ve operatörün mevcut oturumu s
 
 Kabul komutları yerelde çalışır; gerçek yürütmeden önce planı ve verilen izinleri inceleyin. Proje kayıt betikleri kendileri ağ isteği göndermez. Dosyaları okuyan bir AI ajanı ise hizmet sağlayıcısının veri işleme koşullarına tabidir.
 
+**Windows güvenlik sınırı:** Windows'ta kehanet Codex sandbox'ında (elevated mod) çalışır. Kapı ağacı dışına yazmayı ve dışarı TCP'yi engeller; ancak DNS sorguları sistemin DNS hizmeti üzerinden sandbox'tan çıkabilir ve sandbox diskin tamamını okuyabilir. Kehanet betiğinin kendisi ağa erişemez, ama çalıştırdığı bir işçi programı veriyi DNS ile sızdırabilir. Linux'ta bu kanal yoktur. Güvenilmeyen işçi çıktısını sır içermeyen bir makine veya hesapta çalıştırın. Ayrıntı: [docs/WINDOWS.tr.md](docs/WINDOWS.tr.md).
+
 ## Belgeler
 
 | Belge | Dil |
 | --- | --- |
+| [Windows kurulumu ve sınırlar](docs/WINDOWS.tr.md) | Türkçe |
+| [Windows setup and limits](docs/WINDOWS.md) | English |
 | [Motor rehberi](docs/MOTOR.md) | Türkçe |
 | [Kullanım ve proje kaydı](docs/KULLANIM.md) | Türkçe |
 | [Sık sorulanlar](docs/SSS.md) | Türkçe |

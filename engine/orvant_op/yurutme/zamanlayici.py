@@ -1,22 +1,21 @@
 """S3 paralel yürütmesi, yürütme grupları ve kabul edilmiş çıktıların etki kümesi."""
 import concurrent.futures
 import contextlib
-import fcntl
 import fnmatch
 import hashlib
 import json
 import os
 import queue
-import shlex
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum, uyum_komut
 from orvant_op.mimar.kehanet import kehanet_gecersiz_mi, kehanet_yolu
 from . import korumali, s4_kancasi
-from .akis import _git, _json_yaz
+from .akis import _git, _json_yaz, _goreli_mi
 from .butce_defteri import DenemeMixin
 from .karantina import KarantinaMixin
 
@@ -45,9 +44,9 @@ class YurutmeKilidi:
             derinlik = getattr(self._yerel, "derinlik", 0)
             if not derinlik:
                 self.yol.parent.mkdir(parents=True, exist_ok=True)
-                fd = os.open(self.yol, os.O_RDWR | os.O_CREAT, 0o666)
+                fd = os.open(self.yol, os.O_RDWR | os.O_CREAT | uyum.O_BINARY, 0o666)
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    uyum.kilitle(fd)
                 except BaseException:
                     os.close(fd)
                     raise
@@ -63,7 +62,7 @@ class YurutmeKilidi:
             self._yerel.derinlik -= 1
             if not self._yerel.derinlik:
                 try:
-                    fcntl.flock(self._yerel.fd, fcntl.LOCK_UN)
+                    uyum.kilit_birak(self._yerel.fd)
                 finally:
                     os.close(self._yerel.fd)
                     del self._yerel.fd
@@ -76,6 +75,11 @@ def kaliplar_cakisir(a_listesi, b_listesi):
     def cakisir(a, b):
         if any(not p or p.startswith("/") or ".." in p.split("/") for p in (a, b)):
             return True
+        if uyum.WINDOWS:
+            # Ters eğik çizgi/sürücü harfi ayrıklığı kanıtlanamaz; `Src/A.py` ile `src/a.py` aynı dosyadır.
+            if any("\\" in p or p[1:2] == ":" for p in (a, b)):
+                return True
+            a, b = a.casefold(), b.casefold()
         a, b = (p + "**" if p.endswith("/") else p for p in (a, b))
         for x, y in zip(a.split("/"), b.split("/")):
             if "**" in (x, y):
@@ -106,8 +110,7 @@ def _gorevler_cakisir(plan, a, a_yollari, b, b_yollari):
         return True
     for x in a_yollari:
         for y in b_yollari:
-            x, y = Path(x).resolve(), Path(y).resolve()
-            if x.is_relative_to(y) or y.is_relative_to(x):
+            if _goreli_mi(x, y) or _goreli_mi(y, x):
                 return True
     def ag_izni(g):
         return any(y["id"] in g["yetki_istek_ids"] and y["durum"] == "verildi"
@@ -321,8 +324,9 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                         with self._kilit():
                             plan = self._plan()
                             if gorev_id is not None and kehanet_gecersiz_mi(self.calisma, gorev_id):
-                                raise ValueError("kehanet yeniden üretilmeli: python3 -m orvant_op mimar "
-                                                 f"kehanet {self.calisma} --gorev {gorev_id}")
+                                raise ValueError("kehanet yeniden üretilmeli: " +
+                                                 uyum_komut.orvant_komutu(
+                                                     ("mimar", "kehanet", str(self.calisma), "--gorev", gorev_id)))
                             for bekleyen in plan["gorevler"]:
                                 if (not kehanet_gecersiz_mi(self.calisma, bekleyen["id"])
                                         and bekleyen["durum"] in ("girdi_bekliyor", "yetki_bekliyor")
@@ -586,14 +590,15 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                     "kaynak_gorev": isaret.get("kaynak_gorev", gorev_id),
                     "t": datetime.now(timezone.utc).isoformat(), "yurutme_grubu": self._grup,
                     "durum": "geri_alma_adayi", "hatalar": hatalar, "makbuz": str(makbuz)}
-                isaretler[gorev_id]["oneri"] = shlex.join([
-                    "python3", "-m", "orvant_op", "yurut", "geri-al", str(self.calisma),
+                isaretler[gorev_id]["oneri"] = uyum_komut.birlestir([
+                    *uyum_komut.python_argv(), "-m", "orvant_op", "yurut", "geri-al", str(self.calisma),
                     gorev_id, "Yeniden denetim kapısı kaldı"])
                 _json_yaz(self.kok / "yeniden_denetim.json", isaretler)
                 self._olay("yeniden_denetim_kaldi", gorev_id, hatalar=hatalar, makbuz=str(makbuz))
                 self._iz("dogrulama", "yeniden denetim kaldı", sonuc="ret", gorev=gorev_id, kanit=[str(makbuz)])
-                sonuc["oneri"] = shlex.join(["python3", "-m", "orvant_op", "yurut", "geri-al", str(self.calisma),
-                                             gorev_id, "Yeniden denetim kapısı kaldı"])
+                sonuc["oneri"] = uyum_komut.birlestir([*uyum_komut.python_argv(), "-m", "orvant_op", "yurut",
+                                                       "geri-al", str(self.calisma),
+                                                       gorev_id, "Yeniden denetim kapısı kaldı"])
             else:
                 self._isaret_sil(gorev_id)
                 self._olay("yeniden_denetim_gecti", gorev_id, makbuz=str(makbuz))
@@ -621,8 +626,8 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
             # Olay yazıcısının flock'u, okuyucunun yarım satır görmesini de önler.
             if yol.exists():
                 with yol.open(encoding="utf-8") as fh:
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
-                    olaylar = [json.loads(s) for s in fh if s.strip()]
+                    with uyum.kilit(fh, paylasimli=True):
+                        olaylar = [json.loads(s) for s in fh if s.strip()]
             else:
                 olaylar = []
             gruplar = {}
