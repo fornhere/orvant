@@ -3,6 +3,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shlex
@@ -29,6 +30,31 @@ from orvant_op.yurutme.yetenek import manifest_uret
 from orvant_op.butce import (VARSAYILAN_TABAN, butce_tabani, gorev_envanteri,
                              hesap_zaman_asimi)  # noqa: F401 (geri uyumlu dışa aktarım)
 from orvant_op import proje as proje_koprusu
+from orvant_op import ayarlar
+
+
+def _kat_kapi_isci(baglanti, anahtarlar):
+    try:
+        from orvant_op.yurutme.kat_kapi import kapi_karari
+        baglanti.send((True, kapi_karari(**anahtarlar)))
+    except BaseException as exc:
+        baglanti.send((False, f"{type(exc).__name__}: {exc}"))
+    finally:
+        baglanti.close()
+
+
+def _kat_derle_isci(baglanti, anahtarlar):
+    try:
+        from orvant_op.mimar.kat_derle import derle
+        taslaklar = anahtarlar.pop("referans_taslaklari")
+        anahtarlar["referans_gozlemleri"] = {
+            anahtar: Yurutme._kat_referans_degeri(islem, beklenen)
+            for anahtar, islem, beklenen in taslaklar}
+        baglanti.send((True, derle(**anahtarlar)))
+    except BaseException as exc:
+        baglanti.send((False, f"{type(exc).__name__}: {exc}"))
+    finally:
+        baglanti.close()
 
 
 def _json_yaz(yol, veri):
@@ -485,6 +511,10 @@ class Yurutme:
         self.iz_yolu = iz_yolu
         self.komut_zaman_asimi = komut_zaman_asimi
         self._son_kehanet_sonucu = None
+        self._son_kat_golge = None
+        self._katlar = {}
+        self._kat_isci_kokleri = {}
+        self._kat_hatalari = {}
         self._son_yol_butunlugu = {"durum": "temiz", "bulgular": []}
 
     def _iz(self, tur, ozet, *, sonuc="ok", ham=None, maliyet=None, aktor="orvant", kanit=(), gorev=None):
@@ -615,6 +645,7 @@ class Yurutme:
         return degisen, ihlaller
 
     def _kapi(self, agac, gorev):
+        self._son_kat_golge = None
         proje_bagi = proje_koprusu.guard(self.calisma, gorev["id"])
         if proje_bagi:
             self.komut_zaman_asimi = proje_bagi["contract"]["policy"]["command_timeout"]
@@ -688,7 +719,209 @@ class Yurutme:
             hatalar.append("Bağımsız kehanet kaldı: " +
                            str(self._son_kehanet_sonucu.get("hata") or
                                self._son_kehanet_sonucu.get("cikti_kuyrugu", ""))[-400:])
+        # Eski kapı tamamlandıktan sonra yalnız telemetri: bu sonuç ``hatalar``a
+        # hiçbir zaman eklenmez ve kabul/ret otoritesini değiştiremez.
+        self._son_kat_golge = self._kat_golge(gorev["id"], agac, hatalar)
         return degisen, ihlaller, komutlar, hatalar
+
+    def _kat_sinir(self, anahtar, varsayilan):
+        deger, dosya = ayarlar._dosyadan("kat", anahtar, self.calisma)
+        if deger is None:
+            deger = varsayilan
+        if type(deger) not in (int, float) or deger <= 0:
+            raise ValueError(f"{dosya or 'varsayılan'} [kat].{anahtar} pozitif sayı olmalı")
+        return deger
+
+    def _kat_alt_surec(self, hedef, anahtarlar):
+        sure = min(float(self._kat_sinir("zaman_asimi", 10)), float(self.komut_zaman_asimi))
+        baglam = multiprocessing.get_context("spawn")
+        alan, cocuk = baglam.Pipe(duplex=False)
+        surec = baglam.Process(target=hedef, args=(cocuk, anahtarlar))
+        surec.start(); cocuk.close()
+        try:
+            if not alan.poll(sure):
+                surec.terminate(); surec.join(1)
+                if surec.is_alive():
+                    surec.kill(); surec.join()
+                raise TimeoutError("zaman_asimi")
+            basarili, sonuc = alan.recv()
+            surec.join()
+            if not basarili:
+                raise RuntimeError(sonuc)
+            return sonuc
+        finally:
+            alan.close()
+            if surec.is_alive():
+                surec.terminate(); surec.join()
+
+    def _kat_golge(self, gorev_id, cikti_koku, eski_hatalar):
+        eski = "ret" if eski_hatalar else "kabul"
+        try:
+            try:
+                kip = ayarlar.kat_kipi(self.calisma)
+            except Exception as exc:
+                self._olay("kat_golge_uyari", gorev_id, oncelik="yuksek",
+                           hata=f"{type(exc).__name__}: {exc}", neden="KAT kipi okunamadı; kapalı sayıldı")
+                return {"kat_yok": "KAT kipi kapalı"}
+            if kip == "kapali":
+                return {"kat_yok": "KAT kipi kapalı"}
+            if gorev_id in self._kat_hatalari:
+                return {**self._kat_hatalari[gorev_id], "eski_karar": eski}
+            kat = self._katlar.get(gorev_id)
+            if kat is None:
+                return {"kat_yok": "yapısal ölçüt yok"}
+            sonuc = self._kat_alt_surec(_kat_kapi_isci, {
+                "kat": kat, "cikti_koku": cikti_koku,
+                "yalitim_sonucu": self._son_kehanet_sonucu,
+                "oturum_dizini": self.calisma,
+                "isci_yazilabilir_kokler": self._kat_isci_kokleri[gorev_id],
+                "beklenen_kat_sha256": kat["kat_sha256"],
+                "beklenen_kat_surumu": kat["kat_surumu"],
+                "azami_cikti_bayt": int(self._kat_sinir("azami_cikti_bayt", 8 * 1024 * 1024))})
+            karar = "kabul" if sonuc.get("gecti") is True else "ret"
+            golge = {"kat_sha256": kat["kat_sha256"], "karar": karar,
+                     "hatalar": sonuc.get("hatalar", []), "eski_karar": eski,
+                     "uyusma": karar == eski}
+            if not golge["uyusma"]:
+                if eski == "kabul" and karar == "ret":
+                    golge["oncelik"] = "yuksek"
+                    if any(str(hata).startswith("kat_kaynak_siniri:")
+                           for hata in golge["hatalar"]):
+                        golge["isaret"] = "kat_kaynak_siniri"
+                    else:
+                        golge["isaret"] = "olasi_yanlis_kabul"
+                self._olay("kat_golge_uyusmazlik", gorev_id, eski_karar=eski,
+                           kat_karar=karar, nedenler=golge["hatalar"],
+                           oncelik=golge.get("oncelik", "normal"),
+                           isaret=golge.get("isaret"))
+            return golge
+        except Exception as exc:
+            # Gölge aracının ve telemetrisinin arızası mevcut kararı değiştiremez.
+            kat = self._katlar.get(gorev_id) or {}
+            hata = {"durum": "kat_hata", "karar": "ret", "kat_sha256": kat.get("kat_sha256"),
+                    "eski_karar": eski, "oncelik": "yuksek",
+                    "hata": "zaman_asimi" if isinstance(exc, TimeoutError) else f"{type(exc).__name__}: {exc}"}
+            try:
+                self._olay("kat_golge_hata", gorev_id, oncelik="yuksek", hata=hata["hata"])
+            except Exception:
+                pass
+            return hata
+
+    @staticmethod
+    def _kat_referans_degeri(islem, beklenen):
+        """Yapısal ölçütün kendi bildiriminden pozitif derleme tanığı üretir."""
+        if islem in ("esit", "kume_esit"):
+            return beklenen
+        if islem == "yok":
+            return None
+        if islem == "var":
+            return True
+        if islem == "tip":
+            return {"string": "x", "number": 0, "integer": 0, "boolean": True,
+                    "array": [], "object": {}, "null": None}.get(beklenen)
+        if islem == "aralik" and isinstance(beklenen, dict):
+            return beklenen.get("en_az", beklenen.get("en_fazla", 0))
+        if islem == "ayrik":
+            return []
+        if islem == "say" and type(beklenen) is int:
+            return [None] * beklenen
+        if islem in ("tum", "herhangi") and beklenen is True:
+            return [True]
+        if islem == "regex_tam" and isinstance(beklenen, str):
+            # KAT derleyicisinin pozitif denetimi için yalnız stdlib regex
+            # ağacından bir tanık üret; desenin dili boşsa fail-closed kalır.
+            import re as _re
+            from re import _constants, _parser
+
+            def parca(dugumler):
+                metin = ""
+                for tur, deger in dugumler:
+                    if tur is _constants.LITERAL:
+                        metin += chr(deger)
+                    elif tur is _constants.NOT_LITERAL:
+                        metin += "x" if deger != ord("x") else "y"
+                    elif tur is _constants.ANY:
+                        metin += "x"
+                    elif tur is _constants.IN:
+                        ters = any(t is _constants.NEGATE for t, _ in deger)
+                        aday = next((chr(v) for t, v in deger if t is _constants.LITERAL), None)
+                        if aday is None:
+                            aday = next((chr(v[0]) for t, v in deger if t is _constants.RANGE), None)
+                        if aday is None:
+                            aday = next(("0" if v is _constants.CATEGORY_DIGIT else "x"
+                                          for t, v in deger if t is _constants.CATEGORY), "x")
+                        if ters and any(t is _constants.LITERAL and ord(aday) == v for t, v in deger): aday = "y"
+                        metin += aday
+                    elif tur in (_constants.MAX_REPEAT, _constants.MIN_REPEAT, _constants.POSSESSIVE_REPEAT):
+                        metin += parca(deger[2]) * deger[0]
+                    elif tur is _constants.SUBPATTERN:
+                        metin += parca(deger[-1])
+                    elif tur is _constants.BRANCH:
+                        metin += parca(deger[1][0])
+                    elif tur is _constants.CATEGORY:
+                        metin += "0" if deger is _constants.CATEGORY_DIGIT else "x"
+                    elif tur in (_constants.AT, _constants.ASSERT, _constants.ASSERT_NOT):
+                        continue
+                    else:
+                        raise ValueError(f"regex tanığı desteklenmeyen düğüm: {tur}")
+                return metin
+
+            tanik = parca(_parser.parse(beklenen, 0))
+            if _re.fullmatch(beklenen, tanik) is not None:
+                return tanik
+            raise ValueError("regex_tam için pozitif tanık üretilemedi")
+        raise ValueError(f"KAT pozitif tanığı yapılandırılmış ölçütten üretilemiyor: {islem}")
+
+    def _kat_hazirla(self, gorev, isci_yazilabilir_kokler):
+        """Onaylı sözleşmeden KAT'ı işçi başlamadan oturum içinde derler/saklar."""
+        gorev_id = gorev["id"]
+        self._kat_hatalari.pop(gorev_id, None)
+        try:
+            if ayarlar.kat_kipi(self.calisma) == "kapali":
+                self._katlar[gorev_id] = None
+                return
+            sozlesme_yol = self.calisma / "karsilama/sozlesme.json"
+            if not sozlesme_yol.exists():
+                self._katlar[gorev_id] = None
+                self._olay("kat_yok", gorev_id, neden="yapısal ölçüt yok")
+                return
+            kabul_sozlesmesi = json.loads(sozlesme_yol.read_text(encoding="utf-8"))
+            bagli = {k.get("sozlesme_kabul_id") for k in gorev.get("kabul", []) if k.get("sozlesme_kabul_id")}
+            yapisallar = [k for k in kabul_sozlesmesi.get("kabul_olcutleri", [])
+                          if k.get("id") in bagli and isinstance(k.get("yapisal"), dict)]
+            if not yapisallar:
+                self._katlar[gorev_id] = None
+                self._olay("kat_yok", gorev_id, neden="yapısal ölçüt yok")
+                return
+            cikti_sozlesmesi = json.loads(sozlesme_yolu(self.calisma, gorev_id).read_text(encoding="utf-8"))
+            kontroller, referans_taslaklari = [], []
+            for sira, kabul in enumerate(yapisallar, 1):
+                y = kabul["yapisal"]
+                yol, alan = y["alan_yolu"].split("#", 1)
+                beklenen = json.loads(y["beklenen_json"])
+                anahtar = f"cikti:{yol}#{alan}"
+                kontroller.append({"id": f"KAT-{sira}", "dayanak_ids": [kabul["id"]],
+                    "kabul_alintisi": kabul["metin"],
+                    "gozlem": {"kaynak": "cikti", "yol": yol, "alan": alan},
+                    "islem": y["islem"], "beklenen": beklenen})
+                referans_taslaklari.append((anahtar, y["islem"], beklenen))
+            kat = self._kat_alt_surec(_kat_derle_isci, {
+                "gorev": gorev_id, "kabuller": None,
+                "cikti_sozlesmesi": cikti_sozlesmesi, "kontroller": kontroller,
+                "referans_taslaklari": referans_taslaklari, "oturum_dizini": self.calisma,
+                "isci_yazilabilir_kokler": list(map(Path, isci_yazilabilir_kokler))})
+            _json_yaz(self.calisma / "plan/kat" / f"{gorev_id}.kat.json", kat)
+            self._katlar[gorev_id] = kat
+            self._kat_isci_kokleri[gorev_id] = list(map(Path, isci_yazilabilir_kokler))
+        except Exception as exc:
+            hata = {"durum": "kat_hata", "karar": "ret", "kat_sha256": None,
+                    "oncelik": "yuksek", "hata": f"{type(exc).__name__}: {exc}"}
+            self._katlar[gorev_id] = None
+            self._kat_hatalari[gorev_id] = hata
+            try:
+                self._olay("kat_golge_hata", gorev_id, oncelik="yuksek", hata=hata["hata"])
+            except Exception:
+                pass
 
     def _makbuz(self, gorev, deneme, **alanlar):
         yol = self.kok / "makbuzlar" / f"{gorev['id']}-{deneme}.json"
@@ -696,7 +929,8 @@ class Yurutme:
             raise RuntimeError(f"makbuz zaten var: {yol}")
         veri = {"gorev": gorev["id"], "deneme": deneme,
                 "cikti_sozlesmesi": _cikti_sozlesmesi(self.calisma, gorev["id"]),
-                "yol_butunlugu": self._son_yol_butunlugu, **alanlar}
+                "yol_butunlugu": self._son_yol_butunlugu,
+                "kat_golge": self._son_kat_golge, **alanlar}
         _json_yaz(yol, veri)
         return yol
 
@@ -1061,6 +1295,7 @@ class Yurutme:
         return tamamlanan
 
     def _gorev_yurut(self, plan, gorev, *, izin_yollari=()):
+        self._son_kat_golge = None
         proje_ayarlari = proje_koprusu.worker_settings(self.calisma, gorev["id"])
         if not gorev["kabul"] or gorev["butce"]["deneme"] < 1 or gorev["butce"]["token"] < 1:
             raise ValueError("görev kabulü ve pozitif bütçe gerekli")
@@ -1120,6 +1355,9 @@ class Yurutme:
             return engel
         agac = self._agac_ac(depo, gorev)
         proje_koprusu.setup_workspace(self.calisma, gorev["id"], agac)
+        # KAT, işçinin ilk çağrısından önce ve yazabildiği bütün kökler bilinince derlenir.
+        self._kat_hazirla(gorev, [agac, self._onbellek(plan), *izin_yollari,
+                                  *proje_koprusu.scratch_directory(self.calisma)])
         self._iz("yurutucu_secimi", gorev["id"], gorev=gorev["id"])
         onceki = []
         for yol in self._makbuzlar(gorev):
@@ -1132,6 +1370,7 @@ class Yurutme:
         deneme = len(self._makbuzlar(gorev)) + 1
         azami = gorev["butce"]["deneme"]
         while deneme <= azami:
+            self._son_kat_golge = None
             gorev["durum"] = "kosuyor"
             self._kaydet_plan(plan)
             girdiler = okunabilir_girdiler(self.calisma)

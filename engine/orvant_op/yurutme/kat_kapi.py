@@ -98,7 +98,8 @@ def _ret(kat, yalitim_sonucu, hatalar, sonuclar=None):
     }
 
 
-def gozlem_topla(kat, cikti_koku):
+def gozlem_topla(kat, cikti_koku, *, azami_cikti_bayt=8 * 1024 * 1024,
+                 kaynak_siniri_bildir=False):
     """JSON çıktılarını kapı tarafında okuyup zorunlu durum sarmallarını üretir."""
     dogrula(kat, kok=cikti_koku)
     kok = Path(cikti_koku).resolve()
@@ -122,7 +123,23 @@ def gozlem_topla(kat, cikti_koku):
                 return sonuc
             if kirik_bag:
                 raise OSError("kırık sembolik bağ")
-            veri = json.loads(dosya.read_text(encoding="utf-8"), object_pairs_hook=cift_yok)
+            fd = os.open(dosya, os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                once = os.fstat(fd)
+                if not stat.S_ISREG(once.st_mode):
+                    raise OSError("çıktı düzenli dosya değil")
+                if once.st_size > azami_cikti_bayt:
+                    raise OSError("çıktı dosyası boyut sınırını aşıyor")
+                with os.fdopen(fd, encoding="utf-8") as akis:
+                    fd = -1
+                    ham = akis.read(azami_cikti_bayt + 1)
+                    sonra = os.fstat(akis.fileno())
+                if len(ham.encode("utf-8")) > azami_cikti_bayt or sonra.st_size > azami_cikti_bayt:
+                    raise OSError("çıktı dosyası boyut sınırını aşıyor")
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+            veri = json.loads(ham, object_pairs_hook=cift_yok)
             if not isaretci.startswith("/"):
                 raise KeyError(isaretci)
             for ham_parca in isaretci[1:].split("/"):
@@ -138,15 +155,18 @@ def gozlem_topla(kat, cikti_koku):
             sonuc[anahtar] = {"durum": "okunamadi" if kirik_bag else "dosya_yok"}
         except (KeyError, IndexError):
             sonuc[anahtar] = {"durum": "bulunamadi"}
-        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-            sonuc[anahtar] = {"durum": "okunamadi"}
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            durum = ("kaynak_siniri" if kaynak_siniri_bildir and isinstance(exc, OSError)
+                     and "boyut sınırını" in str(exc) else "okunamadi")
+            sonuc[anahtar] = {"durum": durum}
         else:
             sonuc[anahtar] = {"durum": "deger", "deger": veri}
     return sonuc
 
 
 def kapi_karari(kat, cikti_koku, yalitim_sonucu, *, oturum_dizini,
-                isci_yazilabilir_kokler, beklenen_kat_sha256, beklenen_kat_surumu, kok=None):
+                isci_yazilabilir_kokler, beklenen_kat_sha256, beklenen_kat_surumu, kok=None,
+                azami_cikti_bayt=8 * 1024 * 1024):
     """KAT ve OS yalıtım sonucundan, hiçbir eksiği başarı saymadan karar üretir.
 
     ``yalitim_sonucu`` değiştirilmeden makbuza taşınır. Adaptör yalıtımı
@@ -198,7 +218,9 @@ def kapi_karari(kat, cikti_koku, yalitim_sonucu, *, oturum_dizini,
     if kat["kat_surumu"] != beklenen_kat_surumu:
         hatalar.append("kat_surumu_farki")
 
-    try: toplayici_kayitlari = gozlem_topla(kat, cikti_koku)
+    try: toplayici_kayitlari = gozlem_topla(
+        kat, cikti_koku, azami_cikti_bayt=azami_cikti_bayt,
+        kaynak_siniri_bildir=True)
     except (KatHatasi, OSError, UnicodeError, TypeError, ValueError) as exc:
         return _ret(kat, yalitim_sonucu, hatalar + [f"gozlemler_gecersiz:{exc}"])
     for kontrol in kat["kontroller"]:
@@ -210,13 +232,16 @@ def kapi_karari(kat, cikti_koku, yalitim_sonucu, *, oturum_dizini,
     kapili_gozlemler = {}
     for kontrol in kat["kontroller"]:
         kayit = toplayici_kayitlari[kontrol["gozlem"]]
-        if (not isinstance(kayit, dict) or kayit.get("durum") not in ("dosya_yok", "bulunamadi", "deger")
+        if (not isinstance(kayit, dict) or kayit.get("durum") not in ("dosya_yok", "bulunamadi", "deger", "kaynak_siniri")
                 or (kayit.get("durum") == "dosya_yok" and set(kayit) != {"durum"})
                 or (kayit.get("durum") == "bulunamadi" and set(kayit) != {"durum"})
+                or (kayit.get("durum") == "kaynak_siniri" and set(kayit) != {"durum"})
                 or (kayit.get("durum") == "deger" and set(kayit) != {"durum", "deger"})):
             hatalar.append(f"gozlem_sarmali_gecersiz:{kontrol['id']}")
             continue
-        if kayit["durum"] == "dosya_yok":
+        if kayit["durum"] == "kaynak_siniri":
+            hatalar.append(f"kat_kaynak_siniri:{kontrol['id']}")
+        elif kayit["durum"] == "dosya_yok":
             hatalar.append(f"gozlem_dosyasi_yok:{kontrol['id']}")
         elif kayit["durum"] == "bulunamadi":
             if kontrol["islem"] != "yok":
@@ -227,7 +252,7 @@ def kapi_karari(kat, cikti_koku, yalitim_sonucu, *, oturum_dizini,
         else:
             kapili_gozlemler[kontrol["gozlem"]] = kayit["deger"]
     if any(h.startswith(("gozlem_sarmali_gecersiz:", "gozlem_bulunamadi:",
-                         "gozlem_dosyasi_yok:")) for h in hatalar):
+                         "gozlem_dosyasi_yok:", "kat_kaynak_siniri:")) for h in hatalar):
         return _ret(kat, yalitim_sonucu, hatalar)
 
     try:
