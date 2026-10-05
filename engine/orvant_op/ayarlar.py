@@ -35,6 +35,9 @@ Dosya biçimi::
     [operator]
     kota_esigi = 80             # isteğe bağlı; yoksa kapalı (ortam: ORVANT_KOTA_ESIGI, "kapali")
 
+    [kat]
+    kip = "golge"               # "kapali" veya "golge"; "otorite" adım 6a'da yasak
+
     [olcer]
     proje_oturumlari = [        # glob, bu dosyanın dizinine göre çözülür
       {proje = "ornek", yol = "../oturumlar/ornek-*"},
@@ -87,7 +90,7 @@ def _oku(yol):
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
-    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon", "olcer"):
+    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon", "olcer", "kat"):
         if bolum in veri and not isinstance(veri[bolum], dict):
             raise AyarHatasi(f"{yol}: [{bolum}] tablo olmalı")
     return veri
@@ -285,6 +288,18 @@ def kota_esigi(baslangic=None):
         deger = float(deger)
     if not 0 < deger <= 100:
         raise AyarHatasi("kota eşiği 0 ile 100 arası (0 hariç) olmalı")
+    return deger
+
+
+def kat_kipi(baslangic=None):
+    """KAT geçiş kipi; 6a'da yalnız kapalı veya karar vermeyen gölge kip vardır."""
+    deger, dosya = _dosyadan("kat", "kip", baslangic)
+    if deger is None:
+        return "golge"
+    if deger == "otorite":
+        raise AyarHatasi(f"{dosya} [kat].kip='otorite' adım 6a'da reddedilir")
+    if deger not in ("kapali", "golge"):
+        raise AyarHatasi(f"{dosya} [kat].kip 'kapali' veya 'golge' olmalı: {deger!r}")
     return deger
 
 

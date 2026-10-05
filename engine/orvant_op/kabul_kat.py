@@ -111,7 +111,47 @@ def _beklenen_dogrula(islem, beklenen):
             raise KatHatasi("aralik: geçersiz sınır")
     if islem == "regex_tam":
         if not isinstance(beklenen, str): raise KatHatasi("regex_tam: desen metin olmalı")
-        try: re.compile(beklenen)
+        try:
+            derlenmis = re.compile(beklenen)
+            from re import _constants, _parser
+            def riskli(dugumler, *, derinlik=0, niceleyici_icinde=False):
+                onceki_sinirsiz = False
+                for tur, deger in dugumler:
+                    if tur in (_constants.GROUPREF, _constants.GROUPREF_EXISTS):
+                        return True
+                    if tur in (_constants.MAX_REPEAT, _constants.MIN_REPEAT):
+                        alt, ust, govde = deger
+                        sinirsiz = ust == _constants.MAXREPEAT
+                        # Sınırsız tekrar tek bir atom/sınıf üzerinde kalabilir. Art
+                        # arda, grup üzerinde veya başka tekrar içinde kullanılamaz.
+                        if (niceleyici_icinde or (sinirsiz and (onceki_sinirsiz
+                                or any(t is _constants.SUBPATTERN for t, _ in govde)))
+                                or (not sinirsiz and ust > 64)
+                                or riskli(govde, derinlik=derinlik,
+                                         niceleyici_icinde=True)):
+                            return True
+                        onceki_sinirsiz = sinirsiz
+                        continue
+                    if tur is _constants.SUBPATTERN:
+                        if derinlik >= 1 or riskli(deger[-1], derinlik=derinlik + 1,
+                                                  niceleyici_icinde=niceleyici_icinde):
+                            return True
+                    elif tur is _constants.BRANCH:
+                        if any(riskli(dal, derinlik=derinlik,
+                                      niceleyici_icinde=niceleyici_icinde)
+                               for dal in deger[1]):
+                            return True
+                    elif tur in (_constants.ASSERT, _constants.ASSERT_NOT):
+                        return True
+                    elif tur is _constants.ATOMIC_GROUP:
+                        return True
+                    elif tur not in (_constants.LITERAL, _constants.NOT_LITERAL,
+                                     _constants.IN, _constants.CATEGORY, _constants.AT):
+                        return True
+                    onceki_sinirsiz = False
+                return False
+            if riskli(_parser.parse(beklenen, derlenmis.flags)):
+                raise KatHatasi("regex_tam: geri izleme riski")
         except re.error as exc: raise KatHatasi(f"regex_tam: geçersiz desen: {exc}") from exc
     if islem in ("kume_esit", "ayrik") and not isinstance(beklenen, list):
         raise KatHatasi(f"{islem}: beklenen liste olmalı")
