@@ -159,6 +159,43 @@
               "string",
               "null"
             ]
+          },
+          "yapisal": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "alan_yolu": {
+                "type": "string",
+                "pattern": "^[^#]+#/.*"
+              },
+              "islem": {
+                "type": "string",
+                "enum": [
+                  "var",
+                  "yok",
+                  "tip",
+                  "esit",
+                  "aralik",
+                  "regex_tam",
+                  "kume_esit",
+                  "ayrik",
+                  "say",
+                  "tum",
+                  "herhangi"
+                ]
+              },
+              "beklenen_json": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "alan_yolu",
+              "islem",
+              "beklenen_json"
+            ]
           }
         },
         "required": [
@@ -168,7 +205,8 @@
           "kehanet",
           "rubrik",
           "inceleyen",
-          "model_kimligi"
+          "model_kimligi",
+          "yapisal"
         ]
       }
     },

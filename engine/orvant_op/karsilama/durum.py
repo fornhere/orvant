@@ -14,7 +14,7 @@ from orvant_op.yer_tutucu import denetle as yer_tutucu_denetle
 from .roller import rol_cagir
 from .soru_sec import sec
 from .erteleme import cevaptan, kayitlar as erteleme_kayitlari
-from .sozlesme import kur, kapi, v03_spec
+from .sozlesme import kur, kapi, sozlesme_hash, v03_spec
 from .kaynaklar import acik_kaynaklar, guncel_gozlemler
 
 
@@ -683,9 +683,12 @@ class Karsilama:
         if hatalar:
             self.gec("engelli", "dogrulama")
             raise ValueError("; ".join(hatalar))
-        onay = self.olay("kullanici_onayi", veri={"revizyon": revizyon, "durum": durum, "insan_dakika": dakika},
+        sha = sozlesme_hash(s)
+        onay = self.olay("kullanici_onayi", veri={"revizyon": revizyon, "durum": durum, "insan_dakika": dakika,
+                         "sozlesme_revizyon": revizyon, "sozlesme_sha256": sha},
                          aktor="kullanici", is_turu="dogrulama", insan_dakika=dakika)
-        s["onay"] = {"revizyon": revizyon, "olay_id": onay["id"], "durum": durum}
+        s["onay"] = {"revizyon": revizyon, "olay_id": onay["id"], "durum": durum,
+                     "sozlesme_revizyon": revizyon, "sozlesme_sha256": sha}
         self.yaz("sozlesme", s)
         self.gec(durum, "dogrulama")
         if durum == "onaylandi":

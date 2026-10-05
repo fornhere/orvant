@@ -52,6 +52,10 @@ def main(argv=None):
                                yer_tutucu_kabul=args.yer_tutucu_kabul)
         elif args.eylem == "sozlesme":
             result = k.oku("sozlesme")
+            for kabul in result.get("kabul_olcutleri", []):
+                yapisal = kabul.get("yapisal")
+                if yapisal is not None:
+                    print(f"Ölçüt {kabul['id']}: {yapisal['alan_yolu']} {yapisal['islem']} {yapisal['beklenen_json']}")
         elif args.eylem == "onayla":
             result = {"durum": k.onayla(args.revizyon, dakika=args.dakika)}
         else:

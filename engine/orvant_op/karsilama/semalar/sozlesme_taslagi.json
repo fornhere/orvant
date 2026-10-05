@@ -99,6 +99,43 @@
           "dayanak_alinti": {
             "type": "string",
             "minLength": 1
+          },
+          "yapisal": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "alan_yolu": {
+                "type": "string",
+                "pattern": "^[^#]+#/.*"
+              },
+              "islem": {
+                "type": "string",
+                "enum": [
+                  "var",
+                  "yok",
+                  "tip",
+                  "esit",
+                  "aralik",
+                  "regex_tam",
+                  "kume_esit",
+                  "ayrik",
+                  "say",
+                  "tum",
+                  "herhangi"
+                ]
+              },
+              "beklenen_json": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "alan_yolu",
+              "islem",
+              "beklenen_json"
+            ]
           }
         },
         "required": [
@@ -110,7 +147,8 @@
           "inceleyen",
           "model_kimligi",
           "dayanak_olay_id",
-          "dayanak_alinti"
+          "dayanak_alinti",
+          "yapisal"
         ]
       }
     },

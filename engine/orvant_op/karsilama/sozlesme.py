@@ -1,6 +1,10 @@
 """Sözleşme inşası, kaynak ve onay kapısı, v0.3 spec dönüşümü."""
+import json
+import hashlib
 import re
 import unicodedata
+
+from orvant_op.kabul_kat import KatHatasi, _beklenen_dogrula, _sonlu
 
 
 _OZNEL_YOK = re.compile(r"(?:herhangi bir |yeni )*öznel kalite ölçütü eklenm(?:ez|iyor)\s*\.?\s*$", re.I)
@@ -19,6 +23,33 @@ _OLCULEBILIR = re.compile(
     re.I,
 )
 _ANAHTAR_DISI = {"kabul", "olcut", "icin", "olan", "olarak", "yalniz", "ayni", "alan", "deger", "sonuc", "uretil", "kontrol", "kaynak", "kullanici"}
+_KAT_ISLEMLERI = {"var", "yok", "tip", "esit", "aralik", "regex_tam", "kume_esit", "ayrik", "say", "tum", "herhangi"}
+
+
+def sozlesme_hash(sozlesme):
+    """Onay alanı hariç sözleşmenin kanonik içerik kimliği."""
+    govde = {k: v for k, v in sozlesme.items() if k != "onay"}
+    ham = json.dumps(govde, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return "sha256:" + hashlib.sha256(ham).hexdigest()
+
+
+def _yapisal_gecerli(yapisal):
+    if yapisal is None:
+        return True
+    if not isinstance(yapisal, dict):
+        return False
+    if set(yapisal) != {"alan_yolu", "islem", "beklenen_json"}:
+        return False
+    if (yapisal["islem"] not in _KAT_ISLEMLERI or not isinstance(yapisal["alan_yolu"], str)
+            or "#/" not in yapisal["alan_yolu"] or not isinstance(yapisal["beklenen_json"], str)):
+        return False
+    try:
+        beklenen = json.loads(yapisal["beklenen_json"], parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)))
+        _sonlu(beklenen)
+        _beklenen_dogrula(yapisal["islem"], beklenen)
+    except (TypeError, ValueError, json.JSONDecodeError, KatHatasi):
+        return False
+    return True
 
 
 def _anahtarlar(metin):
@@ -162,6 +193,8 @@ def kapi(sozlesme, olaylar):
         else:
             hatalar.append(f"kaynaksız gereksinim: {g.get('id')}")
     for k in sozlesme["kabul_olcutleri"]:
+        if not _yapisal_gecerli(k.get("yapisal")):
+            hatalar.append(f"geçersiz yapısal kabul ölçütü: {k.get('id')}")
         if k.get("kanit_durumu") != "calistirilmadi":
             hatalar.append(f"S1 kabul kanıtı çalıştırılmış görünüyor: {k.get('id')}")
         if k.get("tur") == "deterministik" and not k.get("kehanet"):

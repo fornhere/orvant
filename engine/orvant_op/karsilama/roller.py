@@ -62,9 +62,12 @@ def sema_dogrula(sema):
     """Codex yapılandırılmış çıktı için kapalı nesne ve tam required kuralı."""
     if not isinstance(sema, dict):
         raise ValueError("şema nesne olmalı")
+    if "oneOf" in sema or "anyOf" in sema or any(ad.startswith("x-") for ad in sema):
+        raise ValueError("gevşek şema birleşimi veya uzantısı desteklenmiyor")
     if sema.get("type") == "object":
         props = sema.get("properties")
-        if sema.get("additionalProperties") is not False or not isinstance(props, dict) or set(sema.get("required", [])) != set(props):
+        if (sema.get("additionalProperties") is not False or not isinstance(props, dict)
+                or set(sema.get("required", [])) != set(props)):
             raise ValueError("her nesne kapalı ve bütün alanlar required olmalı")
         for prop in props.values():
             sema_dogrula(prop)
@@ -74,6 +77,8 @@ def sema_dogrula(sema):
 
 def veri_dogrula(veri, sema, yol="$"):
     """Kullanılan JSON Schema alt kümesini yerel olarak doğrular."""
+    if "oneOf" in sema or "anyOf" in sema or any(ad.startswith("x-") for ad in sema):
+        raise ValueError(f"{yol}: gevşek şema desteklenmiyor")
     tip = sema.get("type")
     tipler = tip if isinstance(tip, list) else [tip]
     uygun = {"object": lambda x: isinstance(x, dict),
@@ -91,10 +96,12 @@ def veri_dogrula(veri, sema, yol="$"):
         raise ValueError(f"{yol}: metin çok kısa")
     if isinstance(veri, dict):
         props = sema["properties"]
-        if set(veri) != set(props):
+        gerekli = set(sema.get("required", []))
+        if not gerekli <= set(veri) or not set(veri) <= set(props):
             raise ValueError(f"{yol}: eksik veya fazla alan")
         for key, sub in props.items():
-            veri_dogrula(veri[key], sub, f"{yol}.{key}")
+            if key in veri:
+                veri_dogrula(veri[key], sub, f"{yol}.{key}")
     if isinstance(veri, list):
         for n, item in enumerate(veri):
             veri_dogrula(item, sema["items"], f"{yol}[{n}]")
