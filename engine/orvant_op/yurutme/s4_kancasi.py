@@ -207,6 +207,7 @@ def basarisizligi_isle(yurutme, plan, gorev, makbuz_yolu, *, istisna=None):
                                else "RuntimeError" if istisna is not None else None),
               "isci_kostu": True, "orvant_surumu": orvant_surumu(), "envanter": envanter,
               "onceki_teshisler": oncekiler, "toplam_tokens": toplam}
+    baglam["yetenek_manifesti"] = makbuz.get("yetenek_manifesti")
     if makbuz.get("kapsam_ihlalleri"):
         agac = yurutme._agac(yurutme._depo(plan), gorev["id"])
         baglam["artik_incelemesi"] = artik_incele(agac, gorev, makbuz["kapsam_ihlalleri"])

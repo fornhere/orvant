@@ -23,6 +23,7 @@ from orvant_op.mimar.durum import izin_yolu_dogrula
 from orvant_op.mimar.kehanet import Kehanet, calistir_kehanet, kehanet_yolu, okunabilir_girdiler, olcutler
 from orvant_op.mimar.kehanet import kehanet_gecersiz_mi, sozlesme_yolu
 from orvant_op.yurutucu import baslangic_kancasi, grup_run, hedef_calistir, komut_argv, kabuk_geri_dususu
+from orvant_op.yurutme.yetenek import manifest_uret
 
 
 from orvant_op.butce import (VARSAYILAN_TABAN, butce_tabani, gorev_envanteri,
@@ -699,6 +700,16 @@ class Yurutme:
         _json_yaz(yol, veri)
         return yol
 
+    def _yetenek_manifesti(self, plan, gorev, girdiler):
+        """Plan/envanter/kapı sonucundaki mevcut bilgiyi yeni yetki vermeden birleştirir."""
+        envanter_yolu = self.calisma / "plan" / "envanter.json"
+        envanter = (json.loads(envanter_yolu.read_text(encoding="utf-8"))
+                    if envanter_yolu.exists() else {})
+        izinler = [y for y in plan["yetki_istekleri"] if y["id"] in gorev["yetki_istek_ids"]]
+        return manifest_uret(envanter=envanter, okunabilir_girdiler=girdiler,
+                             izinler=izinler,
+                             kapi_yalitimi=self._son_kehanet_sonucu.get("yalitim"))
+
     def _makbuzlar(self, gorev):
         return sorted((p for p in (self.kok / "makbuzlar").glob(f"{gorev['id']}-*.json")
                        if re.fullmatch(re.escape(gorev["id"]) + r"-\d+\.json", p.name)),
@@ -776,6 +787,8 @@ class Yurutme:
                            "cikti_sozlesmesi": _cikti_sozlesmesi(self.calisma, gorev_id),
                            "yol_butunlugu": self._son_yol_butunlugu,
                            "okunabilir_girdiler": eski_makbuz.get("okunabilir_girdiler", []),
+                           "yetenek_manifesti": self._yetenek_manifesti(
+                               plan, gorev, eski_makbuz.get("okunabilir_girdiler", [])),
                            "okuma_denetimi": eski_makbuz.get("okuma_denetimi"),
                            "akis_gunlugu": eski_makbuz.get("akis_gunlugu"),
                            "insan_incelemeleri": inceleme,
@@ -859,6 +872,8 @@ class Yurutme:
         return bekleme_ciktilari(self.calisma, plan, gorev)
 
     def serbest(self, gorev_id):
+        from .gecis import gecis_uygula
+
         plan = self._plan()
         gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
         if gorev is None or gorev["durum"] not in ("girdi_bekliyor", "yetki_bekliyor"):
@@ -868,11 +883,31 @@ class Yurutme:
         if olay is None and not ciktilar:
             raise ValueError("yeni girdi yok")
         onceki = gorev["durum"]
-        ek_deneme = 0
-        if len(self._makbuzlar(gorev)) >= gorev["butce"]["deneme"]:
-            gorev["butce"]["deneme"] += 1
-            ek_deneme = 1
-        gorev["durum"] = "hazir"
+        engel = "girdi_bekleme" if onceki == "girdi_bekliyor" else "yetki_bekleme"
+        kanit_turu = ("bagimli_cikti" if olay is None else
+                       "kullanici_girdisi" if engel == "girdi_bekleme" else "kullanici_yetkisi")
+        kanit_id = olay["id"] if olay else "bagimli:" + ",".join(
+            f"{c['gorev']}:{c['yol']}" for c in ciktilar)
+        olay_yolu = self.kok / "olaylar.jsonl"
+        onceki_gecisler = (map(json.loads, olay_yolu.read_text(encoding="utf-8").splitlines())
+                           if olay_yolu.exists() else ())
+        islenmis_kanitlar = []
+        for kayit in onceki_gecisler:
+            if kayit.get("tur") != "serbest_birakildi" or kayit.get("gorev") != gorev_id:
+                continue
+            veri = kayit.get("veri") or {}
+            if veri.get("kaynak_olay_id"):
+                islenmis_kanitlar.append(veri["kaynak_olay_id"])
+            elif veri.get("bagimli_ciktilar"):
+                islenmis_kanitlar.append("bagimli:" + ",".join(
+                    f"{c['gorev']}:{c['yol']}" for c in veri["bagimli_ciktilar"]))
+        gecis = gecis_uygula(engel, kanit_turu, kanit_id,
+                             deneme=gorev["butce"]["deneme"],
+                             kullanilan_deneme=len(self._makbuzlar(gorev)),
+                             islenmis_kanitlar=islenmis_kanitlar)
+        gorev["butce"]["deneme"] = gecis["deneme"]
+        ek_deneme = gecis["ek_deneme"]
+        gorev["durum"] = gecis["durum"]
         durumlari_hesapla(plan, self._cozulmus_kararlar())
         self._kaydet_plan(plan)
         kaynak = {"kaynak_olay_id": olay["id"]} if olay else {
@@ -1170,6 +1205,7 @@ class Yurutme:
             makbuz = self._makbuz(gorev, deneme, thread_id=kosu["thread_id"],
                                   goal=goal, isci_ozeti=kosu["son_mesaj"],
                                   okunabilir_girdiler=girdiler, okuma_denetimi=okuma,
+                                  yetenek_manifesti=self._yetenek_manifesti(plan, gorev, girdiler),
                                   akis_gunlugu=str(akis_yolu),
                                   isci_zaman_asimi=bool(kosu.get("zaman_asimi")),
                                   degisen_dosyalar=degisen, kapsam_ihlalleri=ihlaller,
