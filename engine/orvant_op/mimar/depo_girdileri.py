@@ -2,12 +2,13 @@
 import subprocess
 from pathlib import Path
 
+from orvant_op import uyum
 from orvant_op.bagimli_ciktilar import guvenli_dosya
 from orvant_op.karsilama.kaynaklar import DOSYA_SINIRI, depo_kaynaklari
 
 
 def _git(depo, *komut):
-    sonuc = subprocess.run(["git", "--literal-pathspecs", *komut], cwd=depo,
+    sonuc = subprocess.run(["git", "-c", "core.quotepath=off", "--literal-pathspecs", *komut], cwd=depo,
                            capture_output=True, check=False)
     if sonuc.returncode:
         raise ValueError("depo kaynak kimliği okunamadı")
@@ -19,15 +20,15 @@ def _kimlik(depo):
     if depo is None or not Path(depo).is_dir():
         return None, {}
     kok = Path(depo).expanduser()
-    if kok.is_symlink():
+    if uyum.baglanti_mi(kok):
         raise ValueError("depo kaynağı sembolik bağ içeriyor")
     kok = kok.resolve()
-    konum = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=kok,
+    konum = subprocess.run(["git", "-c", "core.quotepath=off", "rev-parse", "--show-toplevel"], cwd=kok,
                            capture_output=True, check=False)
-    if konum.returncode or Path(konum.stdout.decode().strip()).resolve() != kok:
+    if konum.returncode or Path(konum.stdout.decode("utf-8").strip()).resolve() != kok:
         return None, {}
     # Yalnız index metaverisi: içerik gözlemci çağrısından önce hiçbir kaynak okunmaz.
-    index = subprocess.run(["git", "ls-files", "--stage", "-z", "--", "*.csv", "*.tsv"],
+    index = subprocess.run(["git", "-c", "core.quotepath=off", "ls-files", "--stage", "-z", "--", "*.csv", "*.tsv"],
                            cwd=kok, capture_output=True, check=False)
     if index.returncode:
         raise ValueError("depo kaynak listesi okunamadı")
@@ -39,17 +40,17 @@ def _kimlik(depo):
         baslik, ad = kayit.split("\t", 1)
         kip, sha, asama = baslik.split()
         yol = kok / ad
-        if any(p.is_symlink() for p in (yol, *yol.parents) if p.is_relative_to(kok)):
+        if any(uyum.baglanti_mi(p) for p in (yol, *yol.parents) if p.is_relative_to(kok)):
             raise ValueError(f"depo kaynağı sembolik bağ içeriyor: {ad}")
         if not guvenli_dosya(kok, ad) or kip not in ("100644", "100755") or asama != "0":
             raise ValueError(f"güvensiz depo kaynağı: {ad}")
         main = _git(kok, "ls-tree", "-z", "main", "--", ad).decode("utf-8").rstrip("\0")
         if main != f"{kip} blob {sha}\t{ad}":
             raise ValueError(f"depo kaynağı main/index kimliği değişti: {ad}")
-        if _git(kok, "hash-object", "--no-filters", "--", ad).decode().strip() != sha:
+        if _git(kok, "hash-object", "--no-filters", "--", ad).decode("utf-8").strip() != sha:
             raise ValueError(f"depo kaynağı çalışma içeriği main ile uyuşmuyor: {ad}")
         kimlikler[ad] = sha
-    main = _git(kok, "rev-parse", "main").decode().strip() if kimlikler else None
+    main = _git(kok, "rev-parse", "main").decode("utf-8").strip() if kimlikler else None
     return kok, {"main": main, "dosyalar": kimlikler} if kimlikler else {}
 
 
@@ -86,5 +87,5 @@ def referans_bagi_dogrula(depo, veri):
 def agac_dogrula(agac, veri):
     """Salt okunur klon, gözlemin alındığı main commit'inden açılmış olmalı."""
     main = veri["depo_kaynak_kimligi"].get("main")
-    if main and _git(agac, "rev-parse", "HEAD").decode().strip() != main:
+    if main and _git(agac, "rev-parse", "HEAD").decode("utf-8").strip() != main:
         raise ValueError("referans ağacı kaynak gözleminin main kimliğiyle uyuşmuyor")

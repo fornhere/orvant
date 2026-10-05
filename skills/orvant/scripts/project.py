@@ -50,6 +50,13 @@ girer; kayıt dosyasına dışarıdan veya elle paralel durum yazımı yapma.
 """
 
 
+def integration_text() -> str:
+    if os.name == "nt":
+        return INTEGRATION.replace("python3 .project/scripts/project.py",
+                                   "py -3 .project/scripts/project.py")
+    return INTEGRATION
+
+
 def emit(value: dict) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
@@ -286,7 +293,7 @@ def initialize(args: argparse.Namespace) -> int:
         write_new(stage / "CONTEXT.md", context)
         if ontology_view is not None:
             write_new(stage / "ONTOLOJİ.md", ontology_view)
-        write_new(stage / "integration.md", INTEGRATION)
+        write_new(stage / "integration.md", integration_text())
         (stage / "scripts").mkdir()
         for name in RUNTIME_FILES:
             shutil.copyfile(source / name, stage / "scripts" / name)
@@ -302,7 +309,7 @@ def initialize(args: argparse.Namespace) -> int:
     warning = None
     try:
         optional_file(root / "AGENTS.md")
-        write_new(root / "AGENTS.md", INTEGRATION)
+        write_new(root / "AGENTS.md", integration_text())
         created = True
     except FileExistsError:
         pass

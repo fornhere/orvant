@@ -2,7 +2,7 @@
 
 [Orvant](../README.tr.md) · [Kullanım](KULLANIM.md) · [Ajanın motor akışı](../skills/orvant/references/engine.md)
 
-Motor bir yazılım hedefini onaylı sözleşme ve görev grafiği üzerinden yürütür. Python **3.11+**, Git ve gerçek koşuda kimliği doğrulanmış Codex CLI gerekir. Beta sürümü **0.1.0b1**; motorun geliştirme ortamı Linux'tur.
+Motor bir yazılım hedefini onaylı sözleşme ve görev grafiği üzerinden yürütür. Python **3.11+**, Git ve gerçek koşuda kimliği doğrulanmış Codex CLI gerekir. Beta sürümü **0.1.0b1**; motorun geliştirme ortamı Linux'tur. Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` yerel olarak doğrulandı; diğer Windows sürümleri ve macOS doğrulanmadı.
 
 ## Akış
 
@@ -40,6 +40,8 @@ orvant surdur "<motor-oturumu>" --en-fazla-tur 5 --tur-basina-kosu 3
 orvant operator sorular "<motor-oturumu>"
 ```
 
+Windows'ta aynı komutları `py -3 -m orvant_op ...` ile çalıştırabilirsiniz.
+
 `--kuru` eylemleri önizler; işi yürütmez veya kabul etmez. Gerçek `surdur` model çağırabilir ve ürün deposunu değiştirebilir. İzin ve kararlar gerçek kullanıcı taahhüdüne dayanmalı; genel sözleşme onayı bütün izinleri vermez.
 
 `kullanici_bekleniyor`, `kota`, `zaman_asimi`, `ilerleme_yok` veya `orvant_duzeltmesi_bekleniyor` bitişlerini başarı sayma. Yeni yetkili ilerleme mümkün olduğunda aynı oturumdan devam et; aynı engeli sınırları sessizce artırarak döngüye sokma.
@@ -48,6 +50,6 @@ orvant operator sorular "<motor-oturumu>"
 
 Varsayılan model bütün rollerde `gpt-6.1-sol`dur. `python3 -m orvant_op.ayarlar` etkin ayarları gösterir. Model ayarları ortam değişkenleri, proje `orvant.toml` dosyası ve kullanıcı yapılandırmasından okunabilir.
 
-Gerçek yürütme Codex goal desteği ve `codex sandbox` ister. Kabul komutları yerel kabuk komutlarıdır; kehanet sandbox'ı ve yazma kapsamı kontrolleri her komutu kapsayan genel izolasyon iddiası değildir. Plan ve izinler incelenmelidir.
+Gerçek yürütme Codex goal desteği ve `codex sandbox` ister. Linux'ta yalıtım için `bwrap` alternatif olarak kullanılabilir; Windows'ta yalnızca Codex sandbox desteklenir. Kabul komutları yerel kabuk komutlarıdır; kehanet sandbox'ı ve yazma kapsamı kontrolleri her komutu kapsayan genel izolasyon iddiası değildir. Plan ve izinler incelenmelidir.
 
 Beta kapsamı küçük yazılım işlerine yöneliktir. Kehanetin sözleşmeye bağlanması, bütün gereksinimlerin yeterli veya her model yorumunun doğru olduğunu ispatlamaz. Gerçek kullanımda fayda ve genel güvenilirlik ayrıca değerlendirilmelidir.

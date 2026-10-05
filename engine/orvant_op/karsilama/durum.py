@@ -2,13 +2,13 @@
 import json
 import os
 import re
-import shlex
+import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orvant_op import ayarlar
+from orvant_op import ayarlar, uyum, uyum_komut
 from orvant_op.iz import kaydet
 from orvant_op.yer_tutucu import denetle as yer_tutucu_denetle
 from .roller import rol_cagir
@@ -28,10 +28,11 @@ def _yaz_json(yol, veri):
 
 def _yaz_metin(yol, metin):
     yol = Path(yol)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=yol.parent, delete=False) as fh:
+    # newline="\n": Windows'ta metin kipi `\n`'i `\r\n` yapar; JSON baytları platformdan bağımsız kalsın.
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=yol.parent, delete=False) as fh:
         fh.write(metin)
         gecici = fh.name
-    os.replace(gecici, yol)
+    uyum.degistir(gecici, yol)
 
 
 def _oku_json(yol, varsayilan=None):
@@ -57,6 +58,11 @@ SISTEM_YOKLAMALARI = {
     ("uname", "-a"), ("ldd", "--version"), ("lscpu",), ("nvidia-smi",),
     ("vulkaninfo", "--summary"), ("python3", "--version"), ("df", "-h"), ("free", "-h"),
 }
+# Windows'ta uname/ldd/lscpu/df/free yoktur; varsayılan yoklama kümesi platforma göre seçilir. Doğrulama kümesi
+# (SISTEM_YOKLAMALARI) iki platformda aynıdır: `python --version` gibi Windows biçimleri `_yoklama_argv` ile
+# `python3 --version`e kanonikleşir, açık liste genişlemez.
+VARSAYILAN_YOKLAMALAR = ({("nvidia-smi",), ("vulkaninfo", "--summary"), ("python", "--version")}
+                         if uyum_komut.WINDOWS else SISTEM_YOKLAMALARI)
 AZAMI_SORU_TURU = 4
 AZAMI_ARASTIRMA_TURU = 3
 BOYUTLAR = {
@@ -94,11 +100,33 @@ def _hedef_araclari(hedef):
             and not re.fullmatch(r"[A-Z]{2,5}", ad)}
 
 
+def _arac_yoklamasi(ad):
+    """Aracın kurulu olup olmadığını soran salt okunur yoklama komutu."""
+    return f"where.exe {ad}" if uyum_komut.WINDOWS else f"command -v {ad}"
+
+
+def _yoklama_argv(komut):
+    """Komutu böler. Windows'ta YOLSUZ komut adı kanonikleşir (`GIT.EXE` -> `git`; `python`/`py` ve tam
+    `sys.executable` -> `python3`); yol içeren başka ad kanonikleşmez, dolayısıyla açık listeye giremez."""
+    args = uyum_komut.bol(komut)
+    if uyum_komut.WINDOWS and args:
+        ad = uyum_komut.yolsuz_ad(args[0])
+        if ad is not None:
+            args[0] = "python3" if ad in ("python", "python3", "py") else ad
+        elif os.path.normcase(args[0]) == os.path.normcase(sys.executable):
+            args[0] = "python3"
+    return args
+
+
 def _yoklama_dogrula(komut):
-    args = shlex.split(komut)
+    args = _yoklama_argv(komut)
     if tuple(args) in SISTEM_YOKLAMALARI:
         return
     if len(args) == 3 and args[:2] == ["command", "-v"] and re.fullmatch(r"[A-Za-z][A-Za-z0-9._+-]*", args[2]):
+        return
+    # Windows karşılığı: tek bir araç adı soran `where.exe` / `Get-Command` (`command -v` ile aynı yetki).
+    if (uyum_komut.WINDOWS and len(args) == 2 and args[0] in ("where", "get-command")
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9._+-]*", args[1])):
         return
     if not args or args[0] not in {"pwd", "ls", "rg", "git"}:
         raise ValueError("yoklama komutu salt okunur açık listede değil")
@@ -132,7 +160,7 @@ class Karsilama:
     def olay(self, tur, *, metin=None, veri=None, is_turu="hedef_netlestirme", aktor="orvant", sonuc="ok", insan_dakika=None):
         entry = {"id": uuid.uuid4().hex, "t": _zaman().isoformat().replace("+00:00", "Z"),
                  "tur": tur, "aktor": aktor, "metin": metin, "veri": veri or {}}
-        with (self.kok / "olaylar.jsonl").open("a", encoding="utf-8") as fh:
+        with (self.kok / "olaylar.jsonl").open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
         kaydet(self.iz_yolu, self.calisma.name, is_turu, aktor_tur=aktor,
                kimlik="karsilama" if aktor == "orvant" else "kullanici",
@@ -437,8 +465,8 @@ class Karsilama:
         if not hedef.strip():
             raise ValueError("hedef boş olamaz")
         if yoklamalar is None:
-            yoklamalar = sorted(" ".join(args) for args in SISTEM_YOKLAMALARI)
-            yoklamalar += [f"command -v {ad}" for ad in sorted(_hedef_araclari(hedef))]
+            yoklamalar = sorted(" ".join(args) for args in VARSAYILAN_YOKLAMALAR)
+            yoklamalar += [_arac_yoklamasi(ad) for ad in sorted(_hedef_araclari(hedef))]
         for komut in yoklamalar:
             _yoklama_dogrula(komut)
         kaynak_icerikleri = acik_kaynaklar(kaynaklar)

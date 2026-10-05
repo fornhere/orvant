@@ -25,11 +25,22 @@ canlı nesne haritasını üretir. Bu spec için kaydedilmiş gerçek çıktıla
 
 ## 2. Motoru kur
 
-Motor Linux, Git, Python 3.11+ ve kurulu, oturum açılmış **Codex CLI veya Claude Code (biri yeterli)** gerektirir. İkisi eşit desteklenir; hiçbiri varsayılan veya deneysel değildir. Motor `codex-cli 0.155.1` ile geliştirilmiştir; diğer sürümler doğrulanmadı ve Claude Code için doğrulanmış sürüm iddiası yoktur. macOS veya Windows motor davranışı doğrulanmadı.
+Motor Git, Python 3.11+ ve kurulu, oturum açılmış **Codex CLI veya Claude Code (biri yeterli)** gerektirir. İkisi eşit desteklenir; hiçbiri varsayılan veya deneysel değildir. Motor Linux'ta `codex-cli 0.155.1` ile geliştirilmiştir. Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` bu makinede yerel olarak doğrulandı; başka Windows sürümleri ve başka Codex CLI sürümleri doğrulanmadı. macOS doğrulanmadı.
 
 İşçi seçimi: `ORVANT_YURUTUCU=codex|claude`, `orvant.toml` içindeki `[yurutucu] tur = "codex"` veya `tur = "claude"` ayarından önceliklidir. İkisi de belirtilmezse PATH'te veya ayarlı yolunda kurulu tek ikili otomatik algılanır. İkisi de kuruluysa açık seçim zorunludur; aksi halde Orvant `iki yürütücü bulundu` hatası verir.
 
-Linux'ta kehanetin OS yalıtımı, seçilen işçiden bağımsız olarak bubblewrap (`bwrap`) veya Codex sandbox (`codex sandbox`) gerektirir. `orvant.toml` içindeki `[kehanet] yalitim = "auto"` önce doğrulanmış `bwrap`, sonra Codex sandbox dener; `yalitim = "bwrap"` veya `yalitim = "codex"` ilgili arka ucu zorlar. Kullanılabilir yalıtım arka ucu yoksa Orvant kehaneti çalıştırmaz: kapı kapanır, yalıtımsız koşmaz.
+Kehanetin OS yalıtımı Linux'ta bubblewrap (`bwrap`), Windows'ta Codex sandbox (`codex sandbox`) ister; seçilen işçiden bağımsızdır. `orvant.toml` içindeki `[kehanet] yalitim = "auto"` önce Linux'ta doğrulanmış `bwrap`'ı, sonra Codex sandbox dener; `yalitim = "bwrap"` veya `yalitim = "codex"` ilgili arka ucu zorlar. Kullanılabilir yalıtım arka ucu yoksa Orvant kehaneti çalıştırmaz: kapı kapanır, yalıtımsız koşmaz.
+
+Windows'ta sandbox kullanıcısı kullanıcı profilinizdeki Python'u çalıştıramaz, bu yüzden önce herkesçe okunabilir bir Python kopyası kurulmalıdır:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+py -3 -m pip install .
+py -3 -m orvant_op.mimar.yalitim_windows kur
+```
+
+Linux'ta:
 
 ```sh
 git clone https://github.com/fornhere/orvant.git
@@ -68,6 +79,8 @@ Sözleşmenin onayı bütün izinleri vermez. `ilerle` sonucunu okumadan komutu
 tekrarlama; her soruyu kullanıcıya taşı ve oturumun bastığı gerçek kimlik ile
 revizyonu kullan.
 
+Windows'ta `orvant` PATH'te yoksa komutların başına `py -3 -m orvant_op` ekleyebilirsiniz.
+
 ## 4. Mevcut planı sürdür
 
 Plan oluştuktan sonra aynı oturumu sürdür; `karsila baslat` veya `mimar plan`
@@ -99,4 +112,5 @@ bir cevap, izin veya başka bir yetkili ilerleme mümkün olduğunda sürdür.
 
 Eksiksiz komut başvurusu için [Kullanım](KULLANIM.md), kabul davranışı, oturum
 kayıtları, sınırlar ve bitiş nedenleri için [Motor](MOTOR.md) belgesine bak.
+Windows kurulumu ve bilinen sınırlar için [WINDOWS.tr.md](WINDOWS.tr.md)'ye bak.
 Deneysel `orvant proje` komutu da vardır; bu hızlı başlangıç akışının dışındadır.

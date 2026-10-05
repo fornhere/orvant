@@ -9,6 +9,8 @@ import stat
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
+
 
 ARACLAR = ("ffmpeg", "ffprobe", "uv", "uvx", "python3", "nvidia-smi", "yt-dlp",
            "whisper", "whisper-cli", "tesseract", "git", "node", "npx")
@@ -38,6 +40,50 @@ ARAC_GEREKSINIMLERI = {
     "node": ("~/.npm", "yazma", "npm paket önbelleği", "gerekmez", "gerekmez"),
     "npx": ("~/.npm", "yazma", "npm paket önbelleği", "gerekir", "gerekmez"),
 }
+if uyum.WINDOWS:
+    # Windows'ta uv ve npm önbellekleri %LOCALAPPDATA% altındadır (uv\cache, npm-cache); Hugging Face/Whisper
+    # önbellekleri Windows'ta da ev altındaki ~/.cache'tir.
+    for _ad, _yol in (("uv", "~/AppData/Local/uv/cache"), ("uvx", "~/AppData/Local/uv/cache"),
+                      ("node", "~/AppData/Local/npm-cache"), ("npx", "~/AppData/Local/npm-cache")):
+        ARAC_GEREKSINIMLERI[_ad] = (_yol,) + ARAC_GEREKSINIMLERI[_ad][1:]
+UV_ONBELLEGI = "~/AppData/Local/uv/cache" if uyum.WINDOWS else "~/.cache/uv"
+
+# Windows ev kısaltmaları (komut örneklerinde): "~/" biçimine indirgenir.
+WINDOWS_EV_ONEKI = r"(?:~|\$HOME|%USERPROFILE%|\$env:USERPROFILE)"
+
+
+def hassas_ev_kokleri(ev):
+    """Ev altında yetki/proje hedefi olamayacak kökler (altındaki her yol dahil)."""
+    ev = Path(ev)
+    kokler = [ev / ".ssh", ev / ".gnupg"]
+    if uyum.WINDOWS:
+        roaming, yerel = ev / "AppData" / "Roaming", ev / "AppData" / "Local"
+        # GnuPG (Windows'ta %APPDATA%\gnupg), DPAPI ana anahtarları, kimlik bilgisi ve kasa dizinleri.
+        kokler += [roaming / "gnupg", roaming / "Microsoft" / "Credentials", roaming / "Microsoft" / "Protect",
+                   roaming / "Microsoft" / "Vault", roaming / "Microsoft" / "SystemCertificates",
+                   yerel / "Microsoft" / "Credentials", yerel / "Microsoft" / "Vault"]
+    return tuple(kokler)
+
+
+def ev_kapi_kokleri(ev):
+    """Ev altında yalnız kendisi yasak olan geniş kökler (POSIX: ~/.config; Windows: AppData üçlüsü de)."""
+    ev = Path(ev)
+    if uyum.WINDOWS:
+        return (ev / ".config", ev / "AppData", ev / "AppData" / "Roaming", ev / "AppData" / "Local")
+    return (ev / ".config",)
+
+
+def sistem_kokleri():
+    """İşletim sistemi/program dizinleri; yalnız Windows'ta (POSIX'te önceki davranış korunur: boş)."""
+    if not uyum.WINDOWS:
+        return ()
+    adlar = ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData")
+    return tuple(dict.fromkeys(Path(os.environ[a]) for a in adlar if os.environ.get(a)))
+
+
+def _anahtar(yol):
+    """Büyük/küçük harf duyarsız dosya sisteminde (Windows) karşılaştırma anahtarı."""
+    return str(yol).casefold() if uyum.WINDOWS else str(yol)
 
 
 def gorev_envanteri(calisma, gorev):
@@ -58,7 +104,7 @@ def gorev_envanteri(calisma, gorev):
         # uv run da proje venv'ini seçebilir; sistem Python'u olduğu varsayılamaz.
         ayri_ortam = bool(re.search(
             r"\buv\s+(?:run|tool)\b|\buvx\b|\bvirtualenv\b|\bvenv\b|"
-            r"\bVIRTUAL_ENV\b|/bin/activate\b", komut + " " + (kayit.get("yol") or "")))
+            r"\bVIRTUAL_ENV\b|/bin/activate\b|\bScripts[/\\]activate\b", komut + " " + (kayit.get("yol") or "")))
         sonuc.append({**kayit, "gereksinimler": gereksinimler(kayit),
                       "ayri_python_ortami": ayri_ortam})
     return sonuc
@@ -87,6 +133,8 @@ def gereksinim_cikar(kayit):
         return sonuc
 
     beceri = str(Path(kayit["yol"]).parent) if kayit.get("yol") else None
+    # Karşılaştırmalar "/" ayraçlı ve (Windows'ta) harf duyarsızdır; kayda yazılan yol yerel biçimde kalır.
+    beceri_pos = _anahtar(Path(kayit["yol"]).parent.as_posix()) if kayit.get("yol") else None
     if beceri:
         yol_ekle(beceri, "okuma", "Beceri dizini")
         sonuc["kanit"].append("SKILL.md")
@@ -101,19 +149,25 @@ def gereksinim_cikar(kayit):
         if es:
             ipuclari[ad] = True
             sonuc["kanit"].append(es.group().strip())
-    for es in re.finditer(r"(?:~/|\$HOME/)[^\s\"'`<>;|&()]+", komut):
-        yol = es.group().replace("$HOME/", "~/", 1).rstrip(",.")
+    ev_deseni = r"(?:~/|\$HOME/)" if not uyum.WINDOWS else WINDOWS_EV_ONEKI + r"[/\\]"
+    for es in re.finditer(ev_deseni + r"[^\s\"'`<>;|&()]+", komut):
+        yol = es.group().rstrip(",.")
+        if uyum.WINDOWS:
+            yol = "~/" + re.sub(r"^" + WINDOWS_EV_ONEKI + r"[/\\]", "", yol).replace("\\", "/")
+        else:
+            yol = yol.replace("$HOME/", "~/", 1)
         # Mutlak beceri yolunun evini okumadan, aynı göreli son parçayı tanı.
         parcalar = Path(yol[2:]).parts
-        beceri_altinda = beceri and (yol == beceri or yol.startswith(beceri + "/"))
+        yol_pos = _anahtar(yol)
+        beceri_altinda = beceri_pos and (yol_pos == beceri_pos or yol_pos.startswith(beceri_pos + "/"))
         for i in range(1, len(parcalar) + 1):
-            if beceri and beceri.endswith("/" + "/".join(parcalar[:i])):
+            if beceri_pos and beceri_pos.endswith("/" + _anahtar("/".join(parcalar[:i]))):
                 beceri_altinda = True
                 break
         if not beceri_altinda:
             yol_ekle(yol, "okuma", "Komut örneğindeki ev yolu")
     if "uv" in ipuclari:
-        yol_ekle("~/.cache/uv", "yazma", "uv ortam/paket önbelleği")
+        yol_ekle(UV_ONBELLEGI, "yazma", "uv ortam/paket önbelleği")
     if "huggingface" in ipuclari:
         yol_ekle("~/.cache/huggingface", "okuma" if "--offline" in ipuclari else "yazma",
                  "Hugging Face model önbelleği")
@@ -143,6 +197,8 @@ def _skaler(deger):
 
 def _ayristir(metin):
     """Basit YAML önbilgi skalerleri; geri kalan belge yalnız kod örneği için okunur."""
+    # CRLF dosyalarda (Windows) kod çiti kapanışındaki `$` "\r" yüzünden eşleşmezdi.
+    metin = metin.replace("\r\n", "\n").replace("\r", "\n")
     satirlar = metin.splitlines()
     alanlar = {}
     govde = metin
@@ -194,6 +250,18 @@ def _skill(yol, kok_turu):
     return kayit
 
 
+def _arac_yolu(ad, path):
+    yol = shutil.which(ad, path=path)
+    if not uyum.WINDOWS or ad != "python3":
+        return yol
+    # Windows'ta `python3` yoktur; PATH'teki WindowsApps takma adı (Mağaza yönlendirmesi) sessizce bozuk olabilir.
+    # Gerçek yorumlayıcı `python`/`py` ile aranır ve takma ad yolları sayılmaz.
+    for aday in (yol, shutil.which("python", path=path), shutil.which("py", path=path)):
+        if aday and "windowsapps" not in aday.casefold():
+            return aday
+    return None
+
+
 def envanter_cikar(*, skill_dizinleri=None, path=None, host=None):
     """Hiçbir araç çalıştırmaz; PATH yalnız shutil.which ile sorgulanır."""
     if skill_dizinleri is None:
@@ -205,8 +273,9 @@ def envanter_cikar(*, skill_dizinleri=None, path=None, host=None):
     kayitlar, gorulen_yollar, ids = [], set(), set()
     for dizin in skill_dizinleri:
         kok = Path(dizin).expanduser().absolute()
-        kok_turu = ("claude" if ".claude" in kok.parts else
-                    "codex" if ".codex" in kok.parts else "diger")
+        parcalar = [p.casefold() for p in kok.parts] if uyum.WINDOWS else kok.parts
+        kok_turu = ("claude" if ".claude" in parcalar else
+                    "codex" if ".codex" in parcalar else "diger")
         try:
             adaylar = sorted(kok.iterdir())
         except OSError:
@@ -218,13 +287,13 @@ def envanter_cikar(*, skill_dizinleri=None, path=None, host=None):
             try:
                 yol.stat()
             except FileNotFoundError:
-                if not yol.is_symlink():
+                if not uyum.baglanti_mi(yol):
                     continue
             except OSError:
                 pass  # Erişim hatası da skill kaydıdır.
-            if str(yol) in gorulen_yollar:
+            if _anahtar(yol) in gorulen_yollar:
                 continue
-            gorulen_yollar.add(str(yol))
+            gorulen_yollar.add(_anahtar(yol))
             kayit = _skill(yol, kok_turu)
             temel_id, sayi = kayit["id"], 2
             # Aynı türde kökler veya aynı name alanı kimlikleri çakıştırabilir.
@@ -234,7 +303,7 @@ def envanter_cikar(*, skill_dizinleri=None, path=None, host=None):
             ids.add(kayit["id"])
             kayitlar.append(kayit)
     for ad in ARACLAR:
-        yol = shutil.which(ad, path=path)
+        yol = _arac_yolu(ad, path)
         kayitlar.append({"id": f"arac:{ad}", "tur": "arac", "ad": ad,
                          "yol": yol, "mevcut": yol is not None})
     for kayit in kayitlar:

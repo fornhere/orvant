@@ -1,7 +1,6 @@
 """Salt okunan tur kararları ve mevcut yetkilerle bunları uygulayan döngü."""
 
 import json
-import shlex
 import subprocess
 import time
 from datetime import datetime
@@ -10,6 +9,7 @@ from pathlib import Path
 from orvant_op import ayarlar
 from orvant_op.butce import etkin_toplam_butce
 from orvant_op.iz import kaydet
+from orvant_op.uyum_komut import orvant_komutu
 from orvant_op.mimar.cli import kehanet_hazirla
 from orvant_op.mimar.durum import Mimar
 from orvant_op.mimar.kehanet import kehanet_yolu, sozlesme_yolu, kehanet_gecersiz_mi
@@ -87,7 +87,7 @@ class Operator:
         return next(g for g in self.yurutme._plan()["gorevler"] if g["id"] == kimlik)
 
     def _komut(self, *parcalar):
-        return "python3 -m orvant_op " + " ".join(shlex.quote(str(p)) for p in parcalar)
+        return orvant_komutu(parcalar)
 
     def _soru(self, gorev, tur, neden, *, teshis=None, karar=None, istek=None, komut=None):
         teshis = teshis or {}

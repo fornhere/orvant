@@ -7,11 +7,45 @@ import re
 import stat
 from pathlib import Path
 
+from orvant_op import uyum
 from orvant_op.kabul_kat import KatHatasi, dogrula, yorumla
+
+if uyum.WINDOWS:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
 
 
 YORUMLAYICI_KIMLIGI = "orvant-kat"
 YORUMLAYICI_ANA_SURUMU = 1
+
+
+def _tutamak_yolu(fd):
+    """Windows: açık tutamağın gerçek yolu (bağlar çözülmüş); POSIX'te None.
+
+    Windows'ta `O_NOFOLLOW` yoktur ve `uyum.guvenli_ac` yalnız son bileşeni denetler. Açılan tutamağın gerçek yolu
+    sorulursa, `resolve()` ile `open()` arasında üst dizinin kavşakla değiştirilmesi de yakalanır.
+    """
+    if not uyum.WINDOWS:
+        return None
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    k32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    tampon = ctypes.create_unicode_buffer(32768)
+    uzunluk = k32.GetFinalPathNameByHandleW(msvcrt.get_osfhandle(fd), tampon, len(tampon), 0)
+    if uzunluk == 0 or uzunluk >= len(tampon):
+        raise OSError("tutamağın gerçek yolu okunamadı")
+    yol = tampon.value
+    if yol.startswith("\\\\?\\UNC\\"):
+        yol = "\\\\" + yol[8:]
+    elif yol.startswith("\\\\?\\"):
+        yol = yol[4:]
+    return Path(yol)
+
+
+def _isci_alaninda(yol, kokler):
+    return any(bilesen == kok or bilesen.is_relative_to(kok)
+               for bilesen in (yol, *yol.parents) for kok in kokler)
 
 
 def oturum_dosyalari_dogrula(oturum_dizini, isci_yazilabilir_kokler):
@@ -40,21 +74,26 @@ def oturum_dosyalari_dogrula(oturum_dizini, isci_yazilabilir_kokler):
         parca = Path(parcalar[0])
         for ad in parcalar[1:]:
             parca /= ad
-            if os.path.islink(parca):
+            # Windows kavşakları (junction) `islink` ile görünmez; `baglanti_mi` ikisini de yakalar.
+            if uyum.baglanti_mi(parca):
                 raise ValueError("oturum dosyası işçi yazma alanında")
         gercek = ham.resolve(strict=True)
-        for bilesen in (gercek, *gercek.parents):
-            if any(bilesen == kok or bilesen.is_relative_to(kok) for kok in kokler):
-                raise ValueError("oturum dosyası işçi yazma alanında")
-        bayraklar = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
-        fd = os.open(ham, bayraklar)
+        if _isci_alaninda(gercek, kokler):
+            raise ValueError("oturum dosyası işçi yazma alanında")
+        # POSIX: O_NOFOLLOW | O_CLOEXEC. Windows: açmadan önce/sonra kimlik karşılaştırması (bkz. uyum.guvenli_ac).
+        fd = uyum.guvenli_ac(ham, os.O_RDONLY)
         try:
+            son = _tutamak_yolu(fd)
+            if son is not None and _isci_alaninda(son, kokler):
+                raise ValueError("oturum dosyası işçi yazma alanında")
             bilgi = os.fstat(fd)
             if not stat.S_ISREG(bilgi.st_mode):
                 raise ValueError("oturum dosyası düzenli dosya değil")
             if bilgi.st_nlink != 1:
                 raise ValueError("oturum dosyası birden çok bağa sahip")
-            if bilgi.st_uid != os.geteuid():
+            # Windows'ta sahiplik ACL ile belirlenir, st_uid yoktur: bu denetim orada yapılmaz (uyum.sahibi_ben_mi
+            # True döner). Windows'ta koruma işçi yazma alanı dışı + bağ yok + tek bağlantı denetimlerine dayanır.
+            if not uyum.sahibi_ben_mi(bilgi):
                 raise ValueError("oturum dosyası süreç kullanıcısına ait değil")
             with os.fdopen(fd, encoding="utf-8") as akis:
                 fd = -1
@@ -110,7 +149,12 @@ def gozlem_topla(kat, cikti_koku, *, azami_cikti_bayt=8 * 1024 * 1024,
             raise KatHatasi("toplayıcı yalnız çıktı JSON gözlemini destekler")
         yol, isaretci = anahtar[6:].split("#", 1)
         ham_dosya = kok / yol
-        kirik_bag = ham_dosya.is_symlink() and not ham_dosya.exists()
+        # Windows kavşağı (junction) `is_symlink` ile görünmez; `baglanti_mi` ikisini de kapsar.
+        kirik_bag = uyum.baglanti_mi(ham_dosya) and not ham_dosya.exists()
+        if uyum.WINDOWS and any(uyum.baglanti_mi(p) for p in (ham_dosya, *ham_dosya.parents)
+                                if p.is_relative_to(kok)):
+            sonuc[anahtar] = {"durum": "okunamadi"}
+            continue
         dosya = ham_dosya.resolve(strict=False)
         if not dosya.is_relative_to(kok):
             raise KatHatasi("gözlem çıktı kökünden kaçamaz")
@@ -123,8 +167,11 @@ def gozlem_topla(kat, cikti_koku, *, azami_cikti_bayt=8 * 1024 * 1024,
                 return sonuc
             if kirik_bag:
                 raise OSError("kırık sembolik bağ")
-            fd = os.open(dosya, os.O_RDONLY | os.O_CLOEXEC)
+            fd = uyum.guvenli_ac(dosya, os.O_RDONLY)
             try:
+                son = _tutamak_yolu(fd)
+                if son is not None and not son.is_relative_to(kok):
+                    raise OSError("gözlem çıktı kökünden kaçtı")
                 once = os.fstat(fd)
                 if not stat.S_ISREG(once.st_mode):
                     raise OSError("çıktı düzenli dosya değil")

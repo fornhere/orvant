@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
 from orvant_op.mimar.kehanet import karar_yollari, SESSIZLIK_ESIGI_DB
 from orvant_op.mimar.girdi_bagi import gorev_baglari, sezgi_girdileri, MEDYA_UZANTILARI
 _KILIT = threading.RLock()
@@ -50,7 +51,7 @@ def olc(yol, *, zaman_asimi=120):
     try:
         p = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
                             "format=duration:stream=codec_type", "-of", "json", gercek],
-                           capture_output=True, text=True, timeout=zaman_asimi)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=zaman_asimi)
         if p.returncode:
             return bitir("uygun_degil", "okunamadı/bozuk: ffprobe başarısız")
         try:
@@ -65,7 +66,7 @@ def olc(yol, *, zaman_asimi=120):
         if sonuc["ses_izi"]:
             p = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", gercek,
                                 "-map", "0:a:0", "-vn", "-af", "volumedetect", "-f", "null", "-"],
-                               capture_output=True, text=True, timeout=zaman_asimi)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=zaman_asimi)
             if p.returncode:
                 return bitir("uygun_degil", "okunamadı/bozuk: ses çözülemedi")
             for ad in ("max", "mean"):
@@ -157,7 +158,7 @@ def denetle(calisma, gorev):
                 gecici = Path(fh.name)
                 json.dump(veri, fh, ensure_ascii=False, indent=2, allow_nan=False)
                 fh.write("\n")
-            os.replace(gecici, kayit)
+            uyum.degistir(gecici, kayit)
         finally:
             if gecici is not None:
                 gecici.unlink(missing_ok=True)

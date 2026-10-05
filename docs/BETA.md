@@ -4,9 +4,11 @@ Bu açık beta, küçük yazılım ve veri otomasyonu işlerinde hedefi sözleş
 planı görev bağlarına ve çıktıyı bağımsız kabul ölçütlerine bağlayan motoru
 ve proje kayıt/ontoloji skill'ini içerir.
 
-Motor Python 3.11+, Linux, Git ve gerçek yürütmede Codex CLI gerektirir.
+Motor Python 3.11+, Git ve gerçek yürütmede Codex CLI gerektirir.
 Varsayılan model `gpt-6.1-sol`dur. Geliştirmede kullanılan Codex CLI sürümü
-0.155.1'dir; diğer sürümlerin uyumluluğu henüz doğrulanmadı.
+0.155.1'dir (Linux); Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` yerel
+olarak doğrulandı. Diğer Windows sürümleri, diğer Codex CLI sürümleri ve macOS
+için uyumluluk henüz doğrulanmadı.
 Kayıt/ontoloji runtime'ı ayrı olarak Python 3.10+ ile kullanılabilir.
 
 Yayımlanan motorun kapsamı hedef netleştirme, planlama, yürütme, bağımsız
@@ -22,6 +24,7 @@ kazanç bu beta için doğrulanmış sonuçlar değildir.
 
 [Kurulum](../README.tr.md) · [Motor](MOTOR.md) ·
 [Ontoloji ve kayıt](KULLANIM.md) ·
+[Windows kurulumu ve sınırlar](WINDOWS.tr.md) ·
 [GitHub Issues](https://github.com/fornhere/orvant/issues)
 
 Bir sorun bildirirken sürümü, işletim sistemi/Codex sürümünü, komutu ve

@@ -5,15 +5,23 @@ import copy
 import fnmatch
 import json
 import re
-import shlex
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+
+from orvant_op import uyum_komut
+from orvant_op.uyum_komut import WINDOWS, bol_islecli, birlestir, komut_adi
 
 
 def kalip_eslesir(yol, kalip):
     """Yürütücünün bileşen bazlı yazılabilir kalıp sözleşmesi."""
     if not kalip or kalip.startswith("/") or ".." in PurePosixPath(kalip).parts:
         return False
+    if WINDOWS:
+        # Sözleşme `/` ayırıcılı göreli kalıptır; `\` ya da sürücü harfi içeren kalıp fail-closed reddedilir.
+        # Yol (git/`Path` çıktısı) `\` ile gelebilir; dosya sistemi büyük/küçük harf duyarsızdır.
+        if "\\" in kalip or re.match(r"[A-Za-z]:", kalip):
+            return False
+        yol, kalip = yol.replace("\\", "/").lower(), kalip.lower()
     if kalip.endswith("/"):
         kalip += "**"
     yollar, kaliplar = yol.split("/"), kalip.split("/")
@@ -35,13 +43,8 @@ def komut_yollari(komut, *, depo=None, uyarilar=None, _derinlik=0):
     if _derinlik > 3:
         return []
     try:
-        parcalar = shlex.split(komut)
-        if any(c in komut for c in ";&|"):
-            # Bitişik kabuk ayraçlarını da ayır; tırnak içindeki ayraçlar korunur.
-            lexer = shlex.shlex(komut, posix=True, punctuation_chars=";&|")
-            lexer.whitespace_split = True
-            lexer.commenters = ""
-            parcalar = list(lexer)
+        # Bitişik kabuk ayraçları da ayrılır; tırnak içindeki ayraçlar korunur. Windows'ta `\` kaçış değildir.
+        parcalar = bol_islecli(komut)
     except ValueError:
         parcalar = re.split(r"\s+|&&|\|\||;|\|", komut)
     sonuc = []
@@ -53,12 +56,17 @@ def komut_yollari(komut, *, depo=None, uyarilar=None, _derinlik=0):
             aday = aday.split("=", 1)[1]
         elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", aday):
             return
+        if WINDOWS:
+            # `tests\a.py` -> `tests/a.py`; sürücü harfli (`C:`) ve UNC (`\sunucu`) yollar depo dışıdır.
+            if re.match(r"[A-Za-z]:", aday):
+                return
+            aday = aday.replace("\\", "/")
         while aday.startswith("./"):
             aday = aday[2:]
         if (not aday or aday.startswith(("/", "~", "-")) or "://" in aday or
                 ".." in aday or any(c in aday for c in "*?[]") or
                 "$(" in aday or "${" in aday or
-                not ("/" in aday or aday.endswith(uzantilar))):
+                not ("/" in aday or (aday.lower() if WINDOWS else aday).endswith(uzantilar))):
             return
         if aday not in sonuc:
             sonuc.append(aday)
@@ -75,7 +83,18 @@ def komut_yollari(komut, *, depo=None, uyarilar=None, _derinlik=0):
             bas += 1
         if bas >= len(belirtecler):
             return
-        ad = Path(belirtecler[bas]).name
+        ad = komut_adi(belirtecler[bas])
+        if WINDOWS and ad in ("cmd", "powershell", "pwsh"):
+            # `cmd /c "..."` ve `powershell -Command "..."`: iç komut dizisini ayrıca çöz.
+            bayrak = {"cmd": ("/c", "/k"), "powershell": ("-command", "-c"), "pwsh": ("-command", "-c")}[ad]
+            for i in range(bas + 1, len(belirtecler) - 1):
+                if belirtecler[i].lower() in bayrak:
+                    kalan = belirtecler[i + 1:]
+                    for yol in komut_yollari(kalan[0] if len(kalan) == 1 else birlestir(kalan), depo=depo,
+                                            uyarilar=uyarilar, _derinlik=_derinlik + 1):
+                        if yol not in sonuc:
+                            sonuc.append(yol)
+                    return
         if ad in ("sh", "bash"):
             for i in range(bas + 1, len(belirtecler) - 1):
                 if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", belirtecler[i]):
@@ -89,11 +108,7 @@ def komut_yollari(komut, *, depo=None, uyarilar=None, _derinlik=0):
                 if yol not in sonuc:
                     sonuc.append(yol)
             return
-        modul_indeksi = None
-        for i, ad in enumerate(belirtecler[:-2]):
-            if ad in ("python", "python3") and belirtecler[i + 1] == "-m":
-                modul_indeksi = i + 2
-                break
+        modul_indeksi = uyum_komut.python_modul_indeksi(belirtecler)
         for i, ad in enumerate(belirtecler):
             if i == modul_indeksi:
                 if ad not in ("unittest", "pytest", "pip", "venv", "json.tool", "http.server"):
@@ -151,10 +166,10 @@ def _make_yollari(args, depo, uyarilar, derinlik):
     def goreli(yol):
         if kok is not None:
             try:
-                return str((kok / yol).resolve().relative_to(kok))
+                return (kok / yol).resolve().relative_to(kok).as_posix()
             except ValueError:
                 return None
-        return str(yol) if not yol.is_absolute() and ".." not in yol.parts else None
+        return yol.as_posix() if not yol.is_absolute() and ".." not in yol.parts else None
 
     make_yolu = goreli(aday)
     sonuc = [make_yolu] if make_yolu else []

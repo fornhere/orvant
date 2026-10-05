@@ -25,11 +25,22 @@ spec are in [`sample-output/`](sample-output/KOMUTLAR.md).
 
 ## 2. Install the engine
 
-The engine requires Linux, Git, Python 3.11+, and installed, signed-in **Codex CLI or Claude Code (one is enough)**. Both are supported equally; neither is the default or experimental. It was developed with `codex-cli 0.155.1`; other versions are unverified, and no verified Claude Code version is claimed. Engine behavior on macOS or Windows is unverified.
+The engine requires Git, Python 3.11+, and installed, signed-in **Codex CLI or Claude Code (one is enough)**. Both workers are supported equally; neither is the default or experimental. The engine was developed on Linux with `codex-cli 0.155.1`. Windows 11 Home + Python 3.12 + `codex-cli 0.158.0` has been verified locally; other Windows versions and other Codex CLI versions are unverified. macOS is unverified.
 
 Worker selection: `ORVANT_YURUTUCU=codex|claude` takes precedence over `orvant.toml` with `[yurutucu] tur = "codex"` or `tur = "claude"`. Without either setting, exactly one installed executable (on PATH or at its configured path) is detected automatically. If both are installed, explicit selection is required; otherwise Orvant reports `iki yürütücü bulundu` (two executors found).
 
-Oracle OS isolation on Linux requires bubblewrap (`bwrap`) or Codex sandbox (`codex sandbox`), independently of the selected worker. In `orvant.toml`, `[kehanet] yalitim = "auto"` tries verified `bwrap` first, then Codex sandbox; `yalitim = "bwrap"` or `yalitim = "codex"` forces that backend. If no usable isolation backend is available, Orvant does not run the oracle: it fails closed and never runs it without isolation.
+Oracle OS isolation requires bubblewrap (`bwrap`) on Linux or Codex sandbox (`codex sandbox`) on Windows, independently of the selected worker. In `orvant.toml`, `[kehanet] yalitim = "auto"` tries the verified Linux backend first, then Codex sandbox; `yalitim = "bwrap"` or `yalitim = "codex"` forces that backend. If no usable isolation backend is available, Orvant does not run the oracle: it fails closed and never runs it without isolation.
+
+On Windows, the sandbox user cannot run Python from your user profile, so you must first create a readable Python copy:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+py -3 -m pip install .
+py -3 -m orvant_op.mimar.yalitim_windows kur
+```
+
+On Linux:
 
 ```sh
 git clone https://github.com/fornhere/orvant.git
@@ -68,6 +79,8 @@ Contract approval does not grant every requested permission. Repeat `ilerle`
 only after reading its result, carry each question to the user, and use the
 actual IDs and revision printed by the session.
 
+Windows users can prefix any command with `py -3 -m orvant_op` if `orvant` is not on PATH.
+
 ## 4. Continue an existing plan
 
 Once a plan exists, continue the same session; do not run `karsila baslat` or
@@ -101,5 +114,6 @@ permission, or other authorized progress is available.
 
 For the complete command reference, see [Usage (Turkish)](KULLANIM.md). For
 acceptance behavior, session records, limitations, and stop reasons, see
-[Engine (Turkish)](MOTOR.md). The experimental `orvant proje` command is also
+[Engine (Turkish)](MOTOR.md). For Windows setup and known limits, see
+[WINDOWS.md](WINDOWS.md). The experimental `orvant proje` command is also
 present, but it is outside this quickstart flow.

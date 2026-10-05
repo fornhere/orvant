@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from link_helpers import sembolik_bag_olustur
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/orvant/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -48,7 +49,7 @@ class GraphTest(unittest.TestCase):
         real.mkdir()
         (real / 'module.py').write_text('def h(): pass\n', encoding='utf-8')
         linked = self.root / 'linked'
-        linked.symlink_to(real, target_is_directory=True)
+        sembolik_bag_olustur(linked, real, dizin=True)
 
         event, report = graph.generate(linked, self.state)
 
@@ -696,7 +697,7 @@ import thing from 'external-package';
                     (self.root / 'b.py').rename(self.root / 'dist/b.py')
                 else:
                     (self.root / 'b.py').rename(self.root / 'target.txt')
-                    (self.root / 'b.py').symlink_to('target.txt')
+                    sembolik_bag_olustur(self.root / 'b.py', 'target.txt')
                 event, report = self.generate()
                 core.preview_event(self.state, event, self.root)
                 new = core.apply_event(self.state, event, self.root)

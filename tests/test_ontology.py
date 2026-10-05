@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from link_helpers import sembolik_bag_olustur
 
 from ontology_fixtures import build_notebook, evidence, event, link, prop, relation_type, write_notebook_files
 from fixtures import build_spec, evidence_items, write_artifacts
@@ -112,7 +113,7 @@ class TypedGraphTests(NotebookCase):
         (self.root / "çıktı-a.txt").unlink()
         with self.assertRaises(ValueError):
             self.fp(["artifact-a"])
-        (self.root / "çıktı-a.txt").symlink_to(self.root / "çıktı-b.txt")
+        sembolik_bag_olustur(self.root / "çıktı-a.txt", self.root / "çıktı-b.txt")
         with self.assertRaises(ValueError):
             self.fp(["artifact-a"])
 

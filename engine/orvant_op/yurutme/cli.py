@@ -2,11 +2,12 @@
 import argparse
 import json
 
+from orvant_op.uyum_komut import konsolu_utf8_yap, prog
 from .zamanlayici import Yurutme
 
 
 def parser_kur(eylem=None):
-    p = argparse.ArgumentParser(prog="python3 -m orvant_op yurut" + (f" {eylem}" if eylem else ""))
+    p = argparse.ArgumentParser(prog=prog("yurut", *([eylem] if eylem else [])))
     p.add_argument("calisma")
     if eylem == "incele":
         p.add_argument("gorev")
@@ -37,6 +38,7 @@ def parser_kur(eylem=None):
 
 
 def main(argv=None):
+    konsolu_utf8_yap()
     argv = list(argv or [])
     eylem = argv.pop(0) if argv and argv[0] in ("durum", "incele", "ac", "kapi", "iptal", "karantina-kaldir", "geri-al", "serbest", "yeniden-denetle") else None
     parser = parser_kur(eylem)

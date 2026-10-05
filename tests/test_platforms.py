@@ -11,6 +11,7 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1] / 'skills/orvant/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import core
+import graph
 import project
 from fixtures import build_spec
 
@@ -33,22 +34,32 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             json.loads(result.stdout)
         self.assertEqual(project.read_json(self.root / '.project/state.json')['revision'], 0)
+        yonerge = (self.root / '.project/integration.md').read_bytes()
+        self.assertNotIn(b'\r\n', yonerge)
+        komut = b'py -3 .project/scripts/project.py' if os.name == 'nt' else b'python3 .project/scripts/project.py'
+        self.assertIn(komut, yonerge)
+        self.assertEqual((self.root / 'AGENTS.md').read_bytes(), yonerge)
 
     def test_competing_writer_waits_then_acquires(self):
         code = """
 import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import project
-print('ready', flush=True)
+Path(sys.argv[3]).write_text('ready', encoding='utf-8')
 with project.writer_lock(sys.argv[2]):
     print('acquired', flush=True)
 """
         child = None
+        ready = self.base / 'child-ready'
         try:
             with project.writer_lock(str(self.root)):
-                child = subprocess.Popen([sys.executable, '-c', code, str(SCRIPTS), str(self.root)],
+                child = subprocess.Popen([sys.executable, '-c', code, str(SCRIPTS), str(self.root), str(ready)],
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding='utf-8')
-                self.assertEqual(child.stdout.readline().strip(), 'ready')
+                deadline = time.monotonic() + 10
+                while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists(), 'second writer did not start within 10 seconds')
                 time.sleep(0.2)
                 self.assertIsNone(child.poll(), 'second writer entered while lock was held')
             out, err = child.communicate(timeout=10)
@@ -81,13 +92,15 @@ with project.writer_lock(sys.argv[2]):
         target.mkdir()
         link = self.base / 'junction'
         result = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)],
-                                capture_output=True)
+                                capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         try:
             with self.assertRaises(ValueError):
                 project.no_symlink(link)
             (target / 'proof.txt').write_text('proof', encoding='utf-8')
+            (target / 'module.py').write_text('def example(): pass\n', encoding='utf-8')
             with self.assertRaises(ValueError):
                 core._hash_file(self.base, 'junction/proof.txt')
+            self.assertEqual(graph._files(self.base, (), (), 10), ['target/module.py'])
         finally:
             link.rmdir()

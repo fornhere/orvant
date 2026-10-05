@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
 VARYANT_ADLARI = ("bos", "iskelet", "sabit", "kismi")
 DIZIN = "<dizin>"
 
@@ -19,7 +20,8 @@ def _goreli(yol):
     if not str(yol).strip() or p.is_absolute() or ".." in p.parts or p == Path("."):
         raise ValueError(f"güvensiz çıktı yolu: {yol!r}")
     # Git yönetim verileri bir çıktı değildir; worktree .git dosyası da korunur.
-    if ".git" in p.parts:
+    parcalar = tuple(x.casefold() for x in p.parts) if uyum.WINDOWS else p.parts
+    if ".git" in parcalar or (uyum.WINDOWS and any(":" in x or x.endswith((".", " ")) for x in parcalar)):
         raise ValueError(f"git yönetim yolu çıktı olamaz: {yol!r}")
     return p
 
@@ -222,7 +224,7 @@ def ornege_ozel_denetimi(yol, sozlesme, agac_ac, girdiler, referans, zaman_asimi
     dosyalar = [Path(g) for g in girdiler if Path(g).is_file()]
     if dosyalar:
         # Büyük girdiler /tmp'ye taşınmaz; kaynak ve çıktı ağaçlarına dokunulmaz.
-        with tempfile.TemporaryDirectory(prefix="ornege-ozel-", dir=yol.parent) as gecici:
+        with uyum.paylasimli_gecici_dizin(prefix="ornege-ozel-", dir=yol.parent) as gecici:
             kopyalar = []
             for i, g in enumerate(dosyalar):
                 kopya = Path(gecici) / f"degismis-{i}-{g.name}"
@@ -303,12 +305,14 @@ def uygula(agac, varyant):
     hedefler = []
     for yol, icerik in varyant["yazilacak"].items():
         hedef = kok / _goreli(yol)
+        if uyum.WINDOWS and any(uyum.baglanti_mi(p) for p in (hedef, *hedef.parents) if p.is_relative_to(kok)):
+            raise ValueError(f"çıktı yolu bağ içeriyor: {yol}")
         if not hedef.resolve().is_relative_to(kok) or hedef.resolve() == kok:
             raise ValueError(f"çıktı temiz ağaç dışında: {yol}")
         hedefler.append((hedef, icerik))
     # Silme önce yapılır: main'de bulunan çıktı dizinleri de gerçekten boşaltılır.
     for hedef, _ in hedefler:
-        if hedef.is_symlink() or hedef.is_file():
+        if uyum.baglanti_mi(hedef) or hedef.is_file():
             hedef.unlink()
         elif hedef.is_dir():
             shutil.rmtree(hedef)
@@ -384,12 +388,12 @@ def kusur_denetimi(kehanet_yolu, sozlesme, agac_ac, girdiler, *, zaman_asimi=60,
 def temiz_agac(depo, *, yontem="worktree", cikar=()):
     if yontem not in ("worktree", "klon"):
         raise ValueError(f"bilinmeyen temiz ağaç yöntemi: {yontem}")
-    with tempfile.TemporaryDirectory(prefix="orvant-kehanet-") as gecici:
+    with uyum.paylasimli_gecici_dizin(prefix="orvant-kehanet-") as gecici:
         temiz = Path(gecici) / "agac"
         komut = (["git", "clone", "--quiet", "--no-hardlinks", "--single-branch", "--branch", "main",
                   str(depo), str(temiz)] if yontem == "klon" else
                  ["git", "-C", str(depo), "worktree", "add", "--detach", str(temiz), "main"])
-        proc = subprocess.run(komut, capture_output=True, text=True)
+        proc = subprocess.run(komut, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if proc.returncode:
             raise RuntimeError(f"temiz kehanet ağacı açılamadı: {proc.stderr.strip()}")
         try:
@@ -398,7 +402,7 @@ def temiz_agac(depo, *, yontem="worktree", cikar=()):
         finally:
             if yontem == "worktree":
                 subprocess.run(["git", "-C", str(depo), "worktree", "remove", "--force", str(temiz)],
-                               capture_output=True, text=True, check=True)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
 
 def _dosya_sha(yol):
@@ -423,7 +427,7 @@ def girdiler_sha256(girdiler):
 
 def _kimlik(yol, sozlesme_yolu, depo, girdiler):
     sha = subprocess.run(["git", "-C", str(depo), "rev-parse", "main"],
-                         capture_output=True, text=True, check=True).stdout.strip()
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
     return {"kehanet_sha256": _dosya_sha(yol), "sozlesme_sha256": _dosya_sha(sozlesme_yolu),
             "main_sha": sha, "girdiler_sha256": girdiler_sha256(girdiler),
             "referans_sha256": _dosya_sha(yol.with_suffix(".referans.json"))}
@@ -448,7 +452,7 @@ def _makbuz_yaz(yol, kayit, kimlik, kaynak):
             gecici = Path(f.name)
             json.dump(veri, f, ensure_ascii=False, indent=2)
             f.write("\n")
-        os.replace(gecici, yol)
+        uyum.degistir(gecici, yol)
     finally:
         if gecici is not None:
             gecici.unlink(missing_ok=True)

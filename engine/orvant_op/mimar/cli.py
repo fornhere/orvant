@@ -1,14 +1,14 @@
 """Mimar komut satırı."""
 import argparse
 import json
-import shlex
 
+from orvant_op.uyum_komut import konsolu_utf8_yap, prog, tirnakla
 from .durum import Mimar, _oku, _yaz
 from .kehanet import Kehanet, kehanet_gecersiz_mi, kehanet_dayanak_degisti, kehanet_yolu
 
 
 def parser_kur():
-    p = argparse.ArgumentParser(prog="python3 -m orvant_op mimar")
+    p = argparse.ArgumentParser(prog=prog("mimar"))
     sub = p.add_subparsers(dest="eylem", required=True)
     kayit = sub.add_parser("proje-kaydi", help="Onaylı planı şema-3 proje kaydına aktar")
     kayit.add_argument("calisma")
@@ -154,6 +154,7 @@ def kehanet_denetle(calisma, gorev_id=None):
 
 
 def main(argv=None):
+    konsolu_utf8_yap()
     args = parser_kur().parse_args(argv)
     mimar = Mimar(args.calisma)
     try:
@@ -185,7 +186,7 @@ def main(argv=None):
                 print(f"## {istek['id']} · {istek['eylem']}\n{istek['ayrinti']}\nNeden: {istek['gerekce']}\nBu kapsam için izin veriyor musunuz?\n")
                 if oneriler.get(istek["id"]):
                     print("Önerilen izin yolları: " + " ".join(
-                        "--yol " + shlex.quote(yol) for yol in oneriler[istek["id"]]))
+                        "--yol " + tirnakla(yol) for yol in oneriler[istek["id"]]))
             return 0
         elif args.eylem == "izin":
             sonuc = mimar.izin(args.istek_id, args.metin, karar=args.karar, dakika=args.dakika, yollar=args.yol)

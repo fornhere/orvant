@@ -10,12 +10,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
 from orvant_op.iz import kaydet
 from orvant_op.karsilama.roller import veri_dogrula
 from .kehanet import kehanet_yolu, kabul_degisiklikleri
 from .dogrulama import (dogrula, durumlari_hesapla, kabul_bagimliliklari,
                        kabul_bagimliliklarini_duzelt)
 from . import arac_yetki, girdi_bagi
+from .envanter import hassas_ev_kokleri, ev_kapi_kokleri, sistem_kokleri
 from .roller import plan_cikar, kaynak_denetle, iddia_bulgulari
 from orvant_op.karsilama.kaynaklar import depo_kaynaklari
 from .yeniden_planlama import rol_cagir as plan_duzelt_cagir, uygula as plan_duzelt_uygula
@@ -33,11 +35,12 @@ def _yaz(yol, veri):
         json.dump(veri, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
         gecici = fh.name
-    os.replace(gecici, yol)
+    uyum.degistir(gecici, yol)
 
 
 def _git(*args, cwd):
-    sonuc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    sonuc = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=cwd,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     if sonuc.returncode:
         raise ValueError(f"git {' '.join(args)}: {(sonuc.stderr or sonuc.stdout).strip()}")
     return sonuc.stdout.strip()
@@ -68,7 +71,7 @@ def _depo_kontrol(yol, *, calisma=None):
     if not ust.is_dir():
         raise ValueError("depo üst yolu dizin değil")
     proc = subprocess.run(["git", "-C", str(ust), "rev-parse", "--show-toplevel"],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode == 0:
         raise ValueError("depo yolu başka bir git deposunun içinde")
     if not os.access(ust, os.W_OK):
@@ -86,10 +89,10 @@ def izin_yolu_dogrula(yol, depo=None):
         raise ValueError("izin yolu mutlak olmalı")
     hedef = ham.resolve()
     orvant = Path(__file__).resolve().parents[2]
-    yasak_kokler = (ev / ".ssh", ev / ".gnupg", orvant)
+    yasak_kokler = (*hassas_ev_kokleri(ev), *sistem_kokleri(), orvant)
     if (not hedef.is_relative_to(ev) or hedef == ev or
             any(hedef.is_relative_to(kok) for kok in yasak_kokler) or
-            hedef == ev / ".config" or
+            hedef in ev_kapi_kokleri(ev) or
             (depo is not None and hedef.is_relative_to(Path(depo).resolve()))):
         raise ValueError("izin yolu güvenli kapsam dışında")
     return str(hedef)

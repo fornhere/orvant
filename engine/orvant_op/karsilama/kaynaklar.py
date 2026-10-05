@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orvant_op import uyum
 OKUMA_SINIRI = 32768
 DOSYA_SINIRI = 32
 
@@ -71,11 +72,11 @@ def depo_kaynaklari(depo):
     if depo is None or not Path(depo).is_dir():
         return []
     kok = Path(depo).resolve()
-    git_koku = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=kok,
+    git_koku = subprocess.run(['git', '-c', 'core.quotepath=off', 'rev-parse', '--show-toplevel'], cwd=kok,
                              capture_output=True, check=False)
-    if git_koku.returncode or Path(git_koku.stdout.decode().strip()).resolve() != kok:
+    if git_koku.returncode or Path(git_koku.stdout.decode('utf-8').strip()).resolve() != kok:
         return []  # Mevcut depo sorusu/kapısı geçersiz konumu ayrıca ele alır.
-    proc = subprocess.run(['git', 'ls-files', '-z', '--', '*.csv', '*.tsv'],
+    proc = subprocess.run(['git', '-c', 'core.quotepath=off', 'ls-files', '-z', '--', '*.csv', '*.tsv'],
                           cwd=kok, capture_output=True, check=False)
     if proc.returncode:
         raise ValueError('depo kaynak listesi okunamadı')
@@ -85,7 +86,8 @@ def depo_kaynaklari(depo):
     sonuc = []
     for ad in yollar:
         yol = kok / ad
-        if not yol.resolve().is_relative_to(kok) or yol.is_symlink():
+        if (not yol.resolve().is_relative_to(kok) or
+                any(uyum.baglanti_mi(p) for p in (yol, *yol.parents) if p.is_relative_to(kok))):
             raise ValueError(f'depo kaynağı sembolik bağ veya depo dışında: {ad}')
         sonuc.append(oku(yol, ad=ad))
     return sonuc

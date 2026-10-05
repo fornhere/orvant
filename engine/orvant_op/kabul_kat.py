@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from pathlib import Path, PurePosixPath
 
@@ -23,6 +24,9 @@ UYGULAYICI = "kat-stdlib-v1"
 AZAMI_DERINLIK = 64
 AZAMI_DUGUM = 10_000
 AZAMI_KANONIK_BOYUT = 1_048_576
+# Windows'ta yol bileşeni olamayan ya da aygıta çıkan adlar (yalnız Windows'ta denetlenir; POSIX'te geçerli adlardır).
+_WINDOWS_AYRILMIS = frozenset(("con", "prn", "aux", "nul", "conin$", "conout$",
+                               *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))))
 
 
 class KatHatasi(ValueError):
@@ -84,6 +88,13 @@ def _yol_dogrula(yol, kok):
     saf = PurePosixPath(yol)
     if saf.is_absolute() or ".." in saf.parts or "." in saf.parts:
         raise KatHatasi(f"güvensiz KAT yolu: {yol}")
+    if os.name == "nt":
+        # Sürücü/akış ayracı (`:`), aygıt adları (NUL, CON...), sondaki nokta/boşluk ve yasak karakterler
+        # Windows'ta çıktı kökünden kaçış ya da aygıt okuması demektir.
+        for parca in parcalar:
+            if (re.search(r'[<>:"|?*\x00-\x1f]', parca) or parca.endswith((".", " "))
+                    or parca.split(".", 1)[0].rstrip(" ").casefold() in _WINDOWS_AYRILMIS):
+                raise KatHatasi(f"Windows'ta güvensiz KAT yolu: {yol}")
     if kok is not None:
         temel = Path(kok).resolve()
         aday = (temel / Path(*saf.parts)).resolve(strict=False)

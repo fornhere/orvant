@@ -1,12 +1,10 @@
 """Plan görevlerini yalıtılmış ağaçta çalıştıran bağımsız kabul kapısı."""
 import contextlib
-import fcntl
 import hashlib
 import json
 import multiprocessing
 import os
 import re
-import shlex
 import sqlite3
 import subprocess
 import tempfile
@@ -30,7 +28,10 @@ from orvant_op.yurutme.yetenek import manifest_uret
 from orvant_op.butce import (VARSAYILAN_TABAN, butce_tabani, gorev_envanteri,
                              hesap_zaman_asimi)  # noqa: F401 (geri uyumlu dışa aktarım)
 from orvant_op import proje as proje_koprusu
-from orvant_op import ayarlar
+from orvant_op import ayarlar, uyum, uyum_komut
+
+# Windows'ta git uzun yolları ve UTF-8 yol adlarını yazdırsın; POSIX argv'si değişmez.
+_GIT_AYARI = ["-c", "core.longpaths=true", "-c", "core.quotepath=off"] if uyum.WINDOWS else []
 
 
 def _kat_kapi_isci(baglanti, anahtarlar):
@@ -59,16 +60,36 @@ def _kat_derle_isci(baglanti, anahtarlar):
 
 def _json_yaz(yol, veri):
     yol.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=yol.parent, delete=False) as fh:
+    # newline="\n": Windows'ta metin kipi `\n`'i `\r\n` yapıp makbuz/plan baytlarını değiştirmesin.
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=yol.parent,
+                                     delete=False) as fh:
         json.dump(veri, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
         gecici = fh.name
-    os.replace(gecici, yol)
+    uyum.degistir(gecici, yol)  # tutamak yukarıda kapandı; Windows'ta açıkken değiştirilmez
+
+
+def _ayni_yol(a, b):
+    """İki yol aynı yeri mi gösteriyor? POSIX'te metin eşitliği (eski davranış); Windows'ta git `C:/x`
+    (eğik çizgi, farklı harf büyüklüğü, 8.3 adı) döndürebildiği için gerçek yola çözülüp karşılaştırılır."""
+    if not uyum.WINDOWS:
+        return str(a) == str(b)
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _goreli_mi(alt, ust):
+    """`alt`, `ust` alt dizininde mi? POSIX'te `Path.is_relative_to`; Windows'ta 8.3 ad ve büyük/küçük
+    harf farklarını yok sayan normcase realpath karşılaştırması kullanılır."""
+    if not uyum.WINDOWS:
+        return Path(alt).is_relative_to(ust)
+    alt = os.path.normcase(os.path.realpath(alt))
+    ust = os.path.normcase(os.path.realpath(ust))
+    return alt == ust or alt.startswith(ust + os.sep)
 
 
 def _git(kok, *args, check=True, env=None):
-    proc = subprocess.run(["git", "-C", str(kok), *map(str, args)],
-                          capture_output=True, text=True, env=env)
+    proc = subprocess.run(["git", *_GIT_AYARI, "-C", str(kok), *map(str, args)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     if check and proc.returncode:
         raise RuntimeError(f"git {' '.join(map(str, args))}: {proc.stderr.strip()}")
     return proc
@@ -77,15 +98,19 @@ def _git(kok, *args, check=True, env=None):
 def _ekle(yol, veri):
     yol.parent.mkdir(parents=True, exist_ok=True)
     satir = (json.dumps(veri, ensure_ascii=False) + "\n").encode("utf-8")
-    fd = os.open(yol, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    # O_BINARY: Windows'ta `os.write` baytları `\n` → `\r\n` çevirmesin (satır hash'i/okuyucu bozulmasın).
+    fd = os.open(yol, os.O_WRONLY | os.O_APPEND | os.O_CREAT | uyum.O_BINARY, 0o666)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        kalan = memoryview(satir)
-        while kalan:
-            yazilan = os.write(fd, kalan)
-            if yazilan == 0:
-                raise OSError("olay satırı yazılamadı")
-            kalan = kalan[yazilan:]
+        uyum.kilitle(fd)
+        try:
+            kalan = memoryview(satir)
+            while kalan:
+                yazilan = os.write(fd, kalan)
+                if yazilan == 0:
+                    raise OSError("olay satırı yazılamadı")
+                kalan = kalan[yazilan:]
+        finally:
+            uyum.kilit_birak(fd)  # Windows kapatmada kilidi gecikmeli bırakabilir
     finally:
         os.close(fd)
 
@@ -114,7 +139,7 @@ def _degisenler(agac):
     for args in (("diff", "--no-renames", "--name-only", "-z", "HEAD"),
                  ("diff", "--cached", "--no-renames", "--name-only", "-z"),
                  ("ls-files", "--others", "--exclude-standard", "-z")):
-        proc = subprocess.run(["git", "-C", str(agac), *args], capture_output=True)
+        proc = subprocess.run(["git", *_GIT_AYARI, "-C", str(agac), *args], capture_output=True)
         if proc.returncode:
             raise RuntimeError(proc.stderr.decode(errors="replace"))
         yollar.update(os.fsdecode(p) for p in proc.stdout.split(b"\0") if p)
@@ -152,7 +177,7 @@ def yol_butunlugu(agac, dosyalar, sozlesme=None):
         try:
             if not yol.is_file():
                 continue
-            if not yol.resolve().is_relative_to(kok):
+            if not _goreli_mi(yol, kok):
                 raise ValueError("kayıt dosyası depo dışında")
             if yol.stat().st_size > 1024 * 1024:
                 raise ValueError("kayıt dosyası tarama sınırını aşıyor (1 MiB)")
@@ -178,19 +203,21 @@ def yol_butunlugu(agac, dosyalar, sozlesme=None):
             elif isinstance(deger, list):
                 bekleyen.extend((f"{anahtar}[{i}]", v) for i, v in enumerate(deger))
             elif isinstance(deger, str) and "://" not in deger and not os.path.isabs(deger):
-                normal = os.path.normpath(deger)
+                # Windows'ta normpath `/` → `\\` çevirir; kaçış denetimi ayırıcıdan bağımsız kalsın.
+                normal = os.path.normpath(deger).replace(os.sep, "/")
                 alan = re.sub(r"\[\d+\]", "[]", anahtar.removeprefix("$."))
                 if yol.suffix == ".jsonl":
                     alan = re.sub(r"^\$\[\]\.?", "", alan)
                 # Bir [] alanı dizinin tek tek yol değerlerini de tanımlar.
                 baglayici = alan in tanimli.get(ad, ())
-                kacis = normal == ".." or normal.startswith("../")
+                kacis = (normal == ".." or normal.startswith("../")
+                         or (uyum.WINDOWS and re.match(r"[A-Za-z]:(?![\\/])", deger) is not None))  # `C:x`: sürücüye göreli
                 agac_yolu = normal.startswith(".orvant/agac/")
                 neden = "göreli yol kaçışı" if kacis else None
                 if baglayici and not neden:
                     try:
                         if (agac_yolu or
-                                not (kok / deger).resolve().is_relative_to(kok) or
+                                not _goreli_mi(kok / deger, kok) or
                                 (not (kok / deger).exists() and (yol.parent / deger).exists())):
                             neden = "depo köküne göreli olmayan yol"
                     except (OSError, ValueError, RuntimeError):
@@ -202,6 +229,30 @@ def yol_butunlugu(agac, dosyalar, sozlesme=None):
                     bulgular.append({"dosya": ad, "anahtar": anahtar, "deger": deger})
     return {"durum": "ret" if retler else "uyari" if bulgular else "temiz",
             "bulgular": (retler + bulgular)[:50]}
+
+
+_OKUYUCULAR = ("cat", "head", "tail", "sha256sum", "sha1sum", "md5sum", "wc",
+               *(("type", "get-content", "gc") if uyum.WINDOWS else ()))
+
+
+def _kabuk_sarmali(parcalar):
+    """`<kabuk> -c <komut>` biçimindeyse iç komut metnini, değilse None döndürür."""
+    ad = Path(parcalar[0]).name
+    if uyum.WINDOWS:
+        ad = ad.casefold().removesuffix(".exe")
+    if ad in ("bash", "sh", "zsh") and len(parcalar) == 3 and parcalar[1] in ("-c", "-lc"):
+        return parcalar[2]
+    if not uyum.WINDOWS:
+        return None
+    if ad == "cmd" and len(parcalar) == 3 and parcalar[1].casefold() in ("/c", "/s"):
+        return parcalar[2]
+    if ad in ("powershell", "pwsh"):
+        for sira, parca in enumerate(parcalar[1:], 1):
+            if not parca.startswith("-"):
+                return None  # betik/komut `-Command`dan önce başlamış
+            if parca.casefold() in ("-command", "-c") and sira + 1 < len(parcalar):
+                return " ".join(parcalar[sira + 1:])
+    return None
 
 
 def okuma_denetimi(agac, girdiler, akis):
@@ -224,10 +275,10 @@ def okuma_denetimi(agac, girdiler, akis):
             return
         hedef = (cwd / yol).resolve()
         izin = next((g for g in izinler if hedef == g or
-                     (g.is_dir() and hedef.is_relative_to(g))), None)
+                     (g.is_dir() and _goreli_mi(hedef, g))), None)
         if izin is not None:
             okunan.add(str(hedef))
-        elif not hedef.is_relative_to(kok):
+        elif not _goreli_mi(hedef, kok):
             dis.append({"yol": str(hedef), "komut": komut})
 
     def tara(komut, cwd, derinlik=0):
@@ -237,17 +288,15 @@ def okuma_denetimi(agac, girdiler, akis):
         if any(c in komut for c in "$`\n"):
             belirsiz.append(komut)
         try:
-            # shlex varsayılanı yolları böler; shell sözcüklerini koru.
-            lex = shlex.shlex(komut, posix=True, punctuation_chars=True)
-            lex.whitespace_split = True
-            parcalar = list(lex)
+            parcalar = uyum_komut.bol_islecli(komut)
         except ValueError:
             belirsiz.append(komut)
             return
         if not parcalar:
             return
-        if Path(parcalar[0]).name in ("bash", "sh", "zsh") and len(parcalar) == 3 and parcalar[1] in ("-c", "-lc"):
-            tara(parcalar[2], cwd, derinlik + 1)
+        ic = _kabuk_sarmali(parcalar)
+        if ic is not None:
+            tara(ic, cwd, derinlik + 1)
             return
         bolumler, bolum = [], []
         for p in parcalar + [";"]:
@@ -265,9 +314,11 @@ def okuma_denetimi(agac, girdiler, akis):
                 cwd = (cwd / bolum[1]).resolve()
                 continue
             arac = Path(bolum[0]).name
+            if uyum.WINDOWS:
+                arac = arac.casefold().removesuffix(".exe")
             # Seçeneksiz veya yalnız bayraklı okuyucular: seçenek argümanları
             # sayı olabilir (head -n 5); diğer araçlar eksik kapsama olarak kalır.
-            if arac not in ("cat", "head", "tail", "sha256sum", "sha1sum", "md5sum", "wc"):
+            if arac not in _OKUYUCULAR:
                 belirsiz.append(komut)
             else:
                 if any(p.startswith("-") for p in bolum[1:]):
@@ -551,7 +602,7 @@ class Yurutme:
     def _agac_ac(self, depo, gorev):
         agac = self._agac(depo, gorev["id"])
         if agac.exists():
-            if _git(agac, "rev-parse", "--show-toplevel").stdout.strip() != str(agac):
+            if not _ayni_yol(_git(agac, "rev-parse", "--show-toplevel").stdout.strip(), agac):
                 raise RuntimeError("beklenen worktree değil")
             self._agaci_tazele(depo, agac, gorev)
             return agac
@@ -567,7 +618,7 @@ class Yurutme:
         eski = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
         if "/.orvant/" not in eski.splitlines():
             exclude.parent.mkdir(parents=True, exist_ok=True)
-            exclude.write_text(eski.rstrip("\n") + "\n/.orvant/\n", encoding="utf-8")
+            exclude.write_text(eski.rstrip("\n") + "\n/.orvant/\n", encoding="utf-8", newline="\n")
         agac.parent.mkdir(parents=True, exist_ok=True)
         _git(depo, "worktree", "add", str(agac), "-b", f"orvant/{gorev['id']}", "main")
         self._olay("calisma_alani_acildi", gorev["id"], agac=str(agac))
@@ -1002,7 +1053,7 @@ class Yurutme:
                not yetkiler[id].get("onay_olay_id") for id in gorev["yetki_istek_ids"]):
             raise ValueError("görev yetkisi doğrulanmadı")
         agac = self._agac(self._depo(plan), gorev_id)
-        if not agac.is_dir() or _git(agac, "rev-parse", "--show-toplevel").stdout.strip() != str(agac):
+        if not agac.is_dir() or not _ayni_yol(_git(agac, "rev-parse", "--show-toplevel").stdout.strip(), agac):
             raise ValueError("görevin mevcut worktree'si bulunamadı")
         degisen, ihlaller, komutlar, hatalar = self._kapi(agac, gorev)
         inceleme = [k["id"] for k in gorev["kabul"] if k["tur"] == "insan_incelemesi"]
@@ -1257,8 +1308,9 @@ class Yurutme:
         for _ in range(en_fazla):
             plan = self._plan()
             if gorev_id is not None and kehanet_gecersiz_mi(self.calisma, gorev_id):
-                raise ValueError("kehanet yeniden üretilmeli: python3 -m orvant_op mimar "
-                                 f"kehanet {self.calisma} --gorev {gorev_id}")
+                raise ValueError("kehanet yeniden üretilmeli: " +
+                                 uyum_komut.orvant_komutu(
+                                     ("mimar", "kehanet", str(self.calisma), "--gorev", gorev_id)))
             for bekleyen in plan["gorevler"]:
                 if kehanet_gecersiz_mi(self.calisma, bekleyen["id"]):
                     continue
@@ -1404,7 +1456,7 @@ class Yurutme:
                     raise
                 finally:
                     akis_yolu.write_text(ham.decode("utf-8", errors="replace")
-                                        if isinstance(ham, bytes) else ham, encoding="utf-8")
+                                        if isinstance(ham, bytes) else ham, encoding="utf-8", newline="\n")
 
             isci_zaman_asimi = hesap_zaman_asimi(
                 gorev, getattr(self, "isci_zaman_asimi", 3600),

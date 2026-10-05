@@ -11,15 +11,18 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orvant_op import ayarlar
+from orvant_op import ayarlar, uyum
 from orvant_op.bagimli_ciktilar import bagimli_ciktilar, guvenli_dosya
 from orvant_op.karsilama.kaynaklar import depo_kaynaklari
 from orvant_op.karsilama.roller import veri_dogrula
+from orvant_op.uyum_surec import BatKomutHatasi
 from orvant_op.yurutucu import calistir, grup_run
 from .kusurlu import (temiz_agac, denetim, atlanan_denetimler, referans_denetle,
                       _dosya_sha, girdiler_sha256)
 from .envanter import gorev_envanteri
 from .izlenebilirlik import uretim_denetimi
+
+WINDOWS = uyum.WINDOWS
 
 SEMA = Path(__file__).with_name("kehanet_sema.json")
 REFERANS_SEMA = Path(__file__).with_name("referans_sema.json")
@@ -521,7 +524,8 @@ def depo_girdileri(calisma, plan):
         return [{"durum": "okunmadi", "neden": str(exc)}]
 
     def git_cikti(*args):
-        proc = subprocess.run(["git", "-C", str(depo), *args], capture_output=True, text=True)
+        proc = subprocess.run(["git", "-C", str(depo), *args], capture_output=True,
+                              encoding="utf-8", errors="replace")
         return proc.stdout.strip() if proc.returncode == 0 else None
 
     sonuc = []
@@ -565,7 +569,7 @@ def canli_depo(agac):
     """G-161: kapı ağacı ayrı bir git worktree'siyse ana (canlı) deponun kökü; değilse None."""
     try:
         proc = subprocess.run(["git", "-C", str(agac), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                              capture_output=True, text=True)
+                              capture_output=True, encoding="utf-8", errors="replace")
     except OSError:
         return None  # git yok (ör. PATH boş): koruma yalnız üretim denetimine kalır.
     if proc.returncode != 0:
@@ -623,9 +627,27 @@ def agac_ozeti(agac):
     for ad, args in (("status", ["status", "--porcelain=v1", "--untracked-files=all"]),
                      ("ls-files", ["ls-files", "--stage"])):
         proc = subprocess.run(["git", "--no-optional-locks", "-C", str(kok), *args],
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=30)
         ozet['git:' + ad] = (proc.returncode, proc.stdout, proc.stderr)
     for dizin, altlar, dosyalar in os.walk(kok, followlinks=False, onerror=hata_yukselt):
+        if WINDOWS:
+            # İzin bitleri Windows'ta anlamsız: tür + içerik özeti (dosya hash'i, bağ hedefi) ve dosya listesi.
+            # Kavşak (junction) os.walk'ta bağ sayılmayabilir: kaydedilir ama içine inilmez.
+            for ad in altlar + dosyalar:
+                yol = Path(dizin) / ad
+                if uyum.baglanti_mi(yol):
+                    try:
+                        icerik = ('bag', os.readlink(yol))
+                    except OSError:
+                        icerik = ('bag', '?')
+                elif yol.is_file():
+                    with yol.open('rb') as kaynak:
+                        icerik = ('dosya', hashlib.file_digest(kaynak, 'sha256').hexdigest())
+                else:
+                    icerik = ('dizin' if yol.is_dir() else 'diger', '')
+                ozet[yol.relative_to(kok).as_posix()] = icerik
+            altlar[:] = [ad for ad in altlar if not uyum.baglanti_mi(Path(dizin) / ad)]
+            continue
         for ad in altlar + dosyalar:
             yol = Path(dizin) / ad
             goreli = str(yol.relative_to(kok))
@@ -676,6 +698,9 @@ def isci_yardimcisi(agac, ciktilar, yalitim_dogrulandi, ortam):
     audit = sys.audit
     beklenen = None
     yalitim_hatasi = False
+    pencere = os.name == 'nt'
+    # Windows: işçi ağacı Job Object'tir; ctypes audit kancasından önce hazırlanır (bkz. yalitim_windows).
+    is_api = win_is_api() if pencere else None
 
     def izin(args):
         # Popen stdin borusunu io.open(fd, 'wb') ile açar; dosya yazma izni değildir.
@@ -692,8 +717,10 @@ def isci_yardimcisi(agac, ciktilar, yalitim_dogrulandi, ortam):
         if type(giris) is not str:
             raise PermissionError('işçi giriş yolu beyanlı Python çıktısı olmalı')
         p = pathlib.Path(giris)
+        # as_posix: plan çıktıları '/' ile yazılır; POSIX'te str(p) ile aynıdır.
         if (p.is_absolute() or '..' in p.parts or p.suffix != '.py' or
-                str(p) not in izinli or any(q.is_symlink() for q in (pathlib.Path(kok) / p, *(pathlib.Path(kok) / p).parents)) or
+                p.as_posix() not in izinli or any(q.is_symlink() or (pencere and q.is_junction())
+                                                  for q in (pathlib.Path(kok) / p, *(pathlib.Path(kok) / p).parents)) or
                 not pathlib.Path(os.path.realpath(kok + os.sep + str(p))).is_relative_to(kok)):
             raise PermissionError('işçi giriş yolu beyanlı Python çıktısı olmalı')
         audit('orvant.isci_calistir', giris)
@@ -708,10 +735,16 @@ def isci_yardimcisi(agac, ciktilar, yalitim_dogrulandi, ortam):
         if (not isinstance(zaman_asimi, (int, float)) or
                 not math.isfinite(zaman_asimi) or zaman_asimi <= 0):
             raise ValueError('zaman_asimi pozitif sonlu sayı olmalı')
-        komut = [python, '-I', '-B', './' + str(p), *argumanlar]
+        # Windows: -X utf8 ile işçinin çıktısı/dosya okuması cp1254 değil UTF-8 olur.
+        komut = [python, '-I', '-B', *(['-X', 'utf8'] if pencere else []), './' + p.as_posix(), *argumanlar]
         beklenen = tuple(komut)
         try:
-            proc = popen(komut, cwd=kok, env=ortam, stdin=subprocess.PIPE,
+            if pencere:
+                # Askıda başlar; job'a atanmadan torun üretemez (CREATE_SUSPENDED|NEW_PROCESS_GROUP|NO_WINDOW).
+                proc = popen(komut, cwd=kok, env=ortam, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, creationflags=0x00000004 | 0x00000200 | 0x08000000)
+            else:
+                proc = popen(komut, cwd=kok, env=ortam, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         except OSError as exc:
             yalitim_hatasi = True
@@ -719,6 +752,18 @@ def isci_yardimcisi(agac, ciktilar, yalitim_dogrulandi, ortam):
             raise RuntimeError('yalıtım yok') from exc
         finally:
             beklenen = None
+        if pencere:
+            is_ = is_api[0](proc) if is_api else None
+            if is_ is None:
+                # Ağaç öldürme güvencesi kurulamadı: işçi koşmaz (fail-closed).
+                proc.kill()
+                proc.wait()
+                for boru in (proc.stdin, proc.stdout, proc.stderr):
+                    boru.close()
+                yalitim_hatasi = True
+                audit('orvant.isci_yalitim_yok')
+                raise RuntimeError('yalıtım yok')
+            return win_isci_bekle(proc, is_, is_api, (girdi or '').encode('utf-8'), zaman_asimi)
         # communicate() sınırsız çıktı biriktirir. Boruları tüket, yalnız ilk 1 MiB'ı tut.
         sinir = 1048576
         cikti = {'stdout': bytearray(), 'stderr': bytearray()}
@@ -812,9 +857,15 @@ def calistir_kehanet(yol, agac, girdiler, zaman_asimi=60):
     yardimci_gerekli = any(isinstance(d, ast.Name) and d.id == "isci_calistir"
                           for d in ast.walk(ast.parse(betik)))
     isci_ortami = {}  # İşçi ortamı miras alınmaz; -I -B yorumlayıcı kuralları argv ile sabittir.
+    if WINDOWS:
+        from . import yalitim_windows  # yalnız Windows; Linux içe aktarma grafiği değişmez
+        isci_ortami = yalitim_windows.isci_ortami()  # yalnız SystemRoot; işçi ortamı yine miras alınmaz
     istenen_yalitim = ayarlar.kehanet_yalitimi(agac)
-    onek, neden = (bwrap_yalitimi(agac, env) if istenen_yalitim in ("auto", "bwrap")
-                   else (None, "ayar codex arka ucunu zorluyor"))
+    if WINDOWS:
+        onek, neden = None, "Windows'ta bwrap yok"  # Windows'ta yalnız codex sandbox (kısıtlı token) denenir
+    else:
+        onek, neden = (bwrap_yalitimi(agac, env) if istenen_yalitim in ("auto", "bwrap")
+                       else (None, "ayar codex arka ucunu zorluyor"))
     codex = ayarlar.codex_ikili(agac)
     if onek is not None:
         yalitim = "bwrap"
@@ -825,27 +876,49 @@ def calistir_kehanet(yol, agac, girdiler, zaman_asimi=60):
             claude_secili = ayarlar.yurutucu_turu(agac) == "claude"
         except ayarlar.AyarHatasi:
             claude_secili = False
-        aciklama = ("Claude seçili ve bwrap yok: kehanet yalıtımı için bubblewrap kurun"
-                    if claude_secili and onek is None else
-                    f"kehanet OS yalıtımı yok; kapı koşmadı ({neden})")
+        if WINDOWS:
+            aciklama = (f"kehanet OS yalıtımı yok; kapı koşmadı (codex bulunamadı: {codex}; Windows'ta "
+                        "kehanet yalnız `codex sandbox` (elevated) içinde koşar)")
+        else:
+            aciklama = ("Claude seçili ve bwrap yok: kehanet yalıtımı için bubblewrap kurun"
+                        if claude_secili and onek is None else
+                        f"kehanet OS yalıtımı yok; kapı koşmadı ({neden})")
         return {"kehanet": str(yol), "gecti": False, "kontroller": [],
                 "yalitim": "yok",
                 "hata": aciklama}
+    python_yolu, dis_yol = sys.executable, "/etc"
+    if WINDOWS:
+        # Fail-closed: sandbox'ın çalıştırabildiği Python yoksa ya da yalıtım sandbox İÇİNDE kanıtlanmazsa
+        # kehanet hiç koşmaz; yalıtımsız geri düşüş yok.
+        python_yolu, neden = yalitim_windows.python_yolu()
+        if python_yolu is None:
+            return {"kehanet": str(yol), "gecti": False, "kontroller": [], "yalitim": "yok",
+                    "hata": f"kehanet OS yalıtımı yok; kapı koşmadı ({neden})"}
+        env = yalitim_windows.codex_ortami(env)
+        dis_yol = yalitim_windows.dis_yollar(agac, yol.parent, python=python_yolu)
+        kanit, neden = yalitim_windows.yokla(codex, python_yolu, agac, env, dis_yol)
+        if not kanit:
+            return {"kehanet": str(yol), "gecti": False, "kontroller": [], "yalitim": "yok",
+                    "hata": f"kehanet OS yalıtımı yok; kapı koşmadı ({neden})"}
     # Yardımcı güvenceyi ortamdan almaz: önsöz betikten ÖNCE mevcut OS sınırını yoklar.
-    isci_ayar = ("ISCI_PYTHON = " + repr(sys.executable) + "\n" +
+    isci_ayar = ("ISCI_PYTHON = " + repr(python_yolu) + "\n" +
+                 "ISCI_ONEK = [ISCI_PYTHON, '-I', '-B'" + (", '-X', 'utf8'" if WINDOWS else "") + "]\n" +
                  "ISCI_CIKTILAR = " + repr(frozenset(ciktilar)) + "\n" +
                  "ISCI_AGAC = " + repr(str(Path(agac).resolve())) + "\n" +
                  "ISCI_ORTAM = " + repr(isci_ortami) + "\n" +
                  "ISCI_DOGRULANDI = dis_yalitim_dogrula(ISCI_AGAC, " + repr(yalitim) +
-                 ", " + repr("/etc") + ")\n" +
+                 ", " + repr(dis_yol) + ")\n" +
                  "isci_calistir, isci_izin, isci_hata = isci_yardimcisi(" +
                  "ISCI_AGAC, ISCI_CIKTILAR, ISCI_DOGRULANDI, ISCI_ORTAM)\n")
     koruma = """import os, runpy, shutil, sys, subprocess, pathlib, selectors, time, math, stat, json, socket, tempfile, signal
-""" + _DIS_YALITIM + """
+""" + (yalitim_windows.DIS_YALITIM if WINDOWS else _DIS_YALITIM) + """
 CANLI = os.environ.get('ORVANT_KEHANET_CANLI_DEPO')
 AGAC = os.environ.get('ORVANT_KEHANET_AGAC')
 ONBELLEK = os.path.join(CANLI, '.orvant', 'onbellek') if CANLI else None
+PENCERE = os.name == 'nt'
 def altinda(yol, kok):
+    # normcase POSIX'te değişmez; Windows'ta yol karşılaştırması büyük/küçük harf duyarsızdır.
+    yol, kok = os.path.normcase(yol), os.path.normcase(kok)
     return yol == kok or yol.startswith(kok + os.sep)
 def canli_mi(yol, cwd=None):
     # G-161: kapı ağacı dışında canlı depo okunamaz; git dışı paylaşılan önbellek hariç (.., bağ dahil çözülür).
@@ -917,8 +990,13 @@ def ffmpeg_denetle(komut):
         if x not in ('-', 'pipe:', 'pipe:1'):
             raise PermissionError(YAZAMAZ)  # değer tüketmeyen konumsal argüman ffmpeg çıktı dosyasıdır.
         i += 1
+def arac_adi(yol):
+    ad = os.path.basename(yol)
+    return ad.lower().removesuffix('.exe') if PENCERE else ad
 def gercek_arac_mi(calisan, cwd):
     # G-170: dizinli ikili, aynı adlı PATH aracının kendisi olmalı (cwd'deki ./git başka ikili olabilir).
+    if PENCERE:
+        return win_gercek_arac(calisan)  # CreateProcess cwd'yi de arar: çözülmüş yol güvenilir konumda olmalı
     if os.sep not in calisan:
         return True
     if cwd is not None:
@@ -929,6 +1007,7 @@ _cerceve_al = sys._getframe
 bakiliyor = False
 isci_yalitim_hatasi = False
 koruma_ihlali = False
+onayli_iplik = None  # Windows: denetlenmiş Popen'ın _winapi.CreateProcess'ine tek kullanımlık izin
 def yardimci_cagrisi_mi():
     nonlocal bakiliyor
     bakiliyor = True
@@ -942,7 +1021,7 @@ def yardimci_cagrisi_mi():
     finally:
         bakiliyor = False
 def denetle(olay, args):
-    nonlocal isci_yalitim_hatasi, koruma_ihlali
+    nonlocal isci_yalitim_hatasi, koruma_ihlali, onayli_iplik
     if olay == 'orvant.isci_yalitim_yok' or (olay == 'orvant.isci_calistir' and not ISCI_DOGRULANDI):
         isci_yalitim_hatasi = True
     if bakiliyor and olay in ('sys._getframe', 'object.__getattr__'):
@@ -973,21 +1052,34 @@ def denetle(olay, args):
         raise PermissionError('kehanet ağ veya sistem komutu kullanamaz')
     if olay in ('os.remove', 'os.rename', 'os.mkdir', 'os.rmdir', 'os.chmod', 'os.chown', 'os.link', 'os.symlink'):
         raise PermissionError('kehanet dosya değiştiremez')
+    if PENCERE:
+        # Popen dışı süreç başlatma (_winapi.CreateProcess, multiprocessing) yalnız denetlenmiş Popen'ın ardından.
+        if olay == '_winapi.CreateProcess':
+            if onayli_iplik is None or onayli_iplik != threading.get_ident():
+                raise PermissionError(SALT_OKUNUR)
+            onayli_iplik = None
+            return
+        win_olay_denetle(olay, args)
     if olay == 'subprocess.Popen':
+        if PENCERE:
+            args = win_popen(args)  # komut satırı metni → argv listesi + gerçekte çalışacak ikili
         if isci_izin(args) and yardimci_cagrisi_mi():
             komut = args[1]
-            giris = komut[3] if len(komut) > 3 else ''
-            if (komut[:3] == [ISCI_PYTHON, '-I', '-B'] and
+            n = len(ISCI_ONEK)
+            giris = komut[n] if len(komut) > n else ''
+            if (komut[:n] == ISCI_ONEK and
                     giris.startswith('./') and giris[2:] in ISCI_CIKTILAR and
                     '..' not in pathlib.Path(giris).parts and giris.endswith('.py') and
                     args[2] == ISCI_AGAC and args[3] == ISCI_ORTAM):
+                if PENCERE:
+                    onayli_iplik = threading.get_ident()
                 return
             raise PermissionError(SALT_OKUNUR)
         komut = args[1]
         # G-165: gerçekte çalışan ikili `executable` (args[0]); komut[0] yalnız görünen addır.
         cwd = args[2] if len(args) > 2 and args[2] is not None else None
-        arac = os.path.basename(str(komut[0])) if isinstance(komut, (list, tuple)) and komut else None
-        if (arac not in IZINLI or os.path.basename(metin(args[0])) != arac
+        arac = arac_adi(str(komut[0])) if isinstance(komut, (list, tuple)) and komut else None
+        if (arac not in IZINLI or arac_adi(metin(args[0])) != arac
                 or not gercek_arac_mi(metin(args[0]), cwd)):
             raise PermissionError(SALT_OKUNUR)
         if any(str(x) in ('-report', '-o', '--output') or str(x).startswith('--output=') for x in komut[1:]):
@@ -997,7 +1089,9 @@ def denetle(olay, args):
         if arac == 'ffmpeg':
             ffmpeg_denetle(komut)
         ortam = args[3] if len(args) > 3 and args[3] is not None else os.environ
-        if any(metin(k).upper().startswith(ORTAM_YASAK) for k in ortam):
+        # Windows: codex sandbox'ın betikten ÖNCE koyduğu GIT_CONFIG_* (safe.directory) aynen geçerse değişiklik değildir.
+        if any(metin(k).upper().startswith(ORTAM_YASAK) and
+               not (PENCERE and BASLANGIC_ORTAMI.get(metin(k).upper()) == ortam[k]) for k in ortam):
             raise PermissionError('kehanet araç ortamını değiştiremez')  # G-167: GIT_DIR, LD_PRELOAD...
         # --git-dir=<yol>, file:<yol> gibi önekli argümanlar ve süreç cwd'si de çözülür.
         if arac == 'git':
@@ -1007,8 +1101,10 @@ def denetle(olay, args):
                         for p in [metin(x)] + metin(x).replace(':', '=').split('=')[1:] if p]
         if any(canli_mi(x, taban) for x, taban in parcalar) or (cwd is not None and canli_mi(cwd)):
             raise PermissionError('kehanet canlı depoyu okuyamaz; depo girdisi kapı ağacında göreli yolla okunur')
+        if PENCERE:
+            onayli_iplik = threading.get_ident()
 IZINLI = set(os.environ.get('ORVANT_KEHANET_ARACLARI', '').split(','))
-""" + _ISCI_KORUMA + isci_ayar + """
+""" + (yalitim_windows.KORUMA_EKI if WINDOWS else "") + _ISCI_KORUMA + isci_ayar + """
 ISCI_KOD = isci_calistir.__code__
 sys.addaudithook(denetle)
 try:
@@ -1028,10 +1124,18 @@ finally:
     satirlar = koruma.splitlines()
     koruma = (satirlar[0] + "\ndef _kehanet_kos():\n" +
               "\n".join("    " + x for x in satirlar[1:]) + "\n_kehanet_kos()\n")
+    girdi = None
     try:
         komut = [sys.executable, "-I", "-B", "-c", koruma, str(yol)]
+        if WINDOWS:
+            # Önsöz stdin'den okunur: Windows komut satırı 32767 karakterle sınırlı ve önsöz betikle birlikte
+            # bunu aşar; dosyaya yazmak da işçinin değiştirebileceği bir ara dosya bırakırdı. -X utf8: betiğin
+            # open()/stdout'u cp1254 değil UTF-8.
+            komut = [python_yolu, "-I", "-B", "-X", "utf8", "-", str(yol)]
+            girdi = koruma
         if yalitim == "codex-sandbox":
-            env["HOME"] = os.environ.get("HOME", "")
+            if not WINDOWS:
+                env["HOME"] = os.environ.get("HOME", "")
             komut = [codex, "sandbox", "--", *komut]
         else:
             if yardimci_gerekli:
@@ -1047,7 +1151,7 @@ finally:
             yalitim = "bwrap"
         # G-150: kendi süreç grubunda; zaman aşımı ve iptal torunlarıyla birlikte durdurur.
         once = agac_ozeti(agac) if yalitim == "codex-sandbox" else None
-        proc = grup_run(komut, cwd=agac, env=env, timeout=zaman_asimi)
+        proc = grup_run(komut, cwd=agac, env=env, timeout=zaman_asimi, input=girdi)
         degisti = once is not None and once != agac_ozeti(agac)
         try:
             veri = json.loads(proc.stdout.strip())
@@ -1072,7 +1176,7 @@ finally:
         return {"kehanet": str(yol), "gecti": False, "zaman_asimi": True,
                 "kontroller": [], "yalitim": yalitim,
                 "agac_yazilabilir": yalitim == "codex-sandbox", "hata": "kehanet zaman aşımı"}
-    except OSError as exc:
+    except (OSError, BatKomutHatasi) as exc:  # BatKomutHatasi: Windows'ta güvenle çağrılamayan .cmd codex
         return {"kehanet": str(yol), "gecti": False, "kontroller": [], "yalitim": yalitim,
                 "agac_yazilabilir": yalitim == "codex-sandbox",
                 "hata": f"kehanet koşusu/ağaç özeti okunamadı: {exc}"}
@@ -1122,7 +1226,7 @@ class Kehanet:
         kehanet_yolu(self.calisma, gorev_id)  # görev kimliği dosya adı için güvenli olmalı
         yol = self.calisma / "plan" / "kehanet-retleri" / f"{gorev_id}.jsonl"
         yol.parent.mkdir(parents=True, exist_ok=True)
-        with yol.open("a", encoding="utf-8") as dosya:
+        with yol.open("a", encoding="utf-8", newline="\n") as dosya:
             dosya.write(json.dumps({
                 "t": datetime.now(timezone.utc).isoformat(), "deneme": deneme, "neden": str(exc),
                 "betik_sha256": hashlib.sha256(betik.encode("utf-8")).hexdigest() if betik is not None else None,
@@ -1213,11 +1317,13 @@ class Kehanet:
                     (yol.with_suffix(".dayanak.json"), json.dumps(dayanak, ensure_ascii=False, indent=2))):
                 if hedef == syol and mevcut_sozlesme is not None:
                     continue  # Eşit sözleşmenin özgün baytlarını ve SHA kilidini de koru.
-                with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=yol.parent, delete=False) as gecici:
+                # newline="\n": Windows'ta CRLF yazılırsa dayanaktaki kehanet_sha256 dosya baytlarıyla uyuşmaz.
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=yol.parent,
+                                                 delete=False) as gecici:
                     geciciler.append((Path(gecici.name), hedef))
                     gecici.write(icerik + "\n")
             for gecici, hedef in geciciler:
-                os.replace(gecici, hedef)
+                uyum.degistir(gecici, hedef)
         finally:
             for gecici, _ in geciciler:
                 gecici.unlink(missing_ok=True)
@@ -1262,11 +1368,12 @@ class Kehanet:
         yol.parent.mkdir(parents=True, exist_ok=True)
         gecici = None
         try:
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=yol.parent, delete=False) as f:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=yol.parent,
+                                             delete=False) as f:
                 gecici = Path(f.name)
                 json.dump(kayit, f, ensure_ascii=False, indent=2)
                 f.write("\n")
-            os.replace(gecici, yol.with_suffix(".referans.json"))
+            uyum.degistir(gecici, yol.with_suffix(".referans.json"))
         finally:
             if gecici is not None:
                 gecici.unlink(missing_ok=True)

@@ -1,6 +1,7 @@
 """Sınırlı plan düzeltme rolü ve deterministik işlem kapısı."""
 import copy
 import json
+import os
 import re
 from pathlib import Path
 
@@ -44,6 +45,8 @@ def _kalip_dogrula(kalip):
             "\\" in kalip or any(x in ("", ".", "..") for x in kalip.rstrip("/").split("/")) or
             "\x00" in kalip):
         raise ValueError("yazılabilir kalıp depo içi güvenli göreli yol olmalı")
+    if os.name == "nt" and any(":" in x or x.endswith((".", " ")) for x in kalip.rstrip("/").split("/")):
+        raise ValueError("yazılabilir kalıp Windows'ta güvenli yol olmalı")
 
 
 def _graf_dogrula(plan):

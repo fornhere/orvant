@@ -10,14 +10,12 @@ import argparse
 import contextlib
 from contextvars import ContextVar
 import copy
-import fcntl
 import hashlib
 import json
 import multiprocessing
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -25,7 +23,9 @@ import tempfile
 import time
 import tomllib
 from datetime import datetime, timezone
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+from . import uyum, uyum_komut
 
 BINDING = "proje.json"
 STATE = "proje-durum.json"
@@ -37,6 +37,48 @@ ENGINE_FILES = ("proje.py", "yurutucu.py", "butce.py", "ayarlar.py", "operator/d
                 "yurutme/akis.py", "yurutme/korumali.py", "yurutme/zamanlayici.py",
                 "yurutme/butce_defteri.py")
 _EXECUTING = ContextVar("orvant_project_execution", default=False)
+# Windows'ta git uzun yolları ve UTF-8 yol adlarını yazdırsın; POSIX argv'si değişmez.
+_GIT_AYARI = ["-c", "core.longpaths=true", "-c", "core.quotepath=off"] if uyum.WINDOWS else []
+# Windows aygıt adları: `NUL`, `con.txt` gibi parçalar dosya değil aygıt açar.
+_WINDOWS_AYGITLARI = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                                *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
+
+
+def _git_komutu(root, *args):
+    return ["git", *_GIT_AYARI, "-C", str(root), *args]
+
+
+def _alt_surec_ortami():
+    """Windows'ta çocuk Python varsayılan kodlamayı (cp1254) değil UTF-8'i kullansın; POSIX'te None."""
+    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"} if uyum.WINDOWS else None
+
+
+def _konsol_utf8():
+    # Windows'ta borulu stdout/stderr yerel kodlamayı kullanır; kodlanamayan karakter çıktıyı çökertmesin.
+    if uyum.WINDOWS:
+        for akim in (sys.stdout, sys.stderr):
+            try:
+                akim.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
+
+
+def _ayni_yol(a, b):
+    """İki yol aynı yeri mi gösteriyor? POSIX'te metin eşitliği; Windows'ta git `C:/x` (eğik çizgi, farklı
+    harf büyüklüğü, 8.3 adı) döndürebildiği için gerçek yola çözülüp karşılaştırılır."""
+    if not uyum.WINDOWS:
+        return str(a) == str(b)
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _goreli_mi(alt, ust):
+    """`alt`, `ust` alt dizininde mi? POSIX'te `Path.is_relative_to`; Windows'ta 8.3 ad ve büyük/küçük
+    harf farklarını yok sayan normcase realpath karşılaştırması kullanılır."""
+    if not uyum.WINDOWS:
+        return Path(alt).is_relative_to(ust)
+    alt = os.path.normcase(os.path.realpath(alt))
+    ust = os.path.normcase(os.path.realpath(ust))
+    return alt == ust or alt.startswith(ust + os.sep)
 
 
 def _digest(value):
@@ -51,18 +93,20 @@ def _read(path):
 def _write(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+    # newline="\n": Windows'ta metin kipi `\n`'i `\r\n` yapıp kaydın baytlarını/hash'ini değiştirmesin.
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=path.parent,
+                                     delete=False) as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
         temporary = stream.name
-    os.replace(temporary, path)
+    uyum.degistir(temporary, path)
 
 
 def _root(path):
     result = Path(path).expanduser().absolute()
-    if any(p.is_symlink() for p in (result, *result.parents)):
+    if any(uyum.baglanti_mi(p) for p in (result, *result.parents)):  # Windows kavşaklarını (junction) da yakalar
         raise ValueError(f"symbolic root forbidden: {path}")
     return result.resolve()
 
@@ -74,10 +118,13 @@ def _file(root, relative):
             or str(path) != relative or "\\" in relative or "\x00" in relative
             or any(c in relative for c in "*?:")):
         raise ValueError(f"exact safe project-relative file required: {relative}")
+    if uyum.WINDOWS and any(p != p.rstrip(" .") or p.split(".", 1)[0].rstrip(" ").upper() in _WINDOWS_AYGITLARI
+                            for p in path.parts):
+        raise ValueError(f"exact safe project-relative file required: {relative}")
     result = Path(root)
     for part in path.parts:
         result /= part
-        if result.is_symlink():
+        if uyum.baglanti_mi(result):
             raise ValueError(f"symbolic file forbidden: {relative}")
     if result.exists() and not result.is_file():
         raise ValueError(f"regular file required: {relative}")
@@ -90,7 +137,7 @@ def _hash(root, relative):
 
 
 def _git(root, *args):
-    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+    result = subprocess.run(_git_komutu(root, *args), capture_output=True, check=False)
     if result.returncode:
         raise ValueError(result.stderr.decode(errors="replace").strip())
     return result.stdout
@@ -115,8 +162,8 @@ def _proje_on_kontrol_ayari(root):
 
 
 def _varsayilan_taban_ref(root):
-    symbolic = subprocess.run(["git", "-C", str(root), "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-                              capture_output=True, text=True, check=False)
+    symbolic = subprocess.run(_git_komutu(root, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     if symbolic.returncode == 0:
         return symbolic.stdout.strip().removeprefix("refs/remotes/")
     branch = _git(root, "branch", "--show-current").decode().strip()
@@ -125,7 +172,7 @@ def _varsayilan_taban_ref(root):
 
 def _ilk_oge(command):
     try:
-        parts = shlex.split(command)
+        parts = uyum_komut.bol(command)
     except ValueError:
         return None
     index = 0
@@ -148,7 +195,7 @@ def _on_kontrol(root, config):
     freshness = {"durum": "bilinmiyor", "taban_ref": base, "kip": mode, "kaynak": "yerel-ref"}
     warnings, blockers = [], []
     if base:
-        exists = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", base + "^{commit}"],
+        exists = subprocess.run(_git_komutu(root, "rev-parse", "--verify", "--quiet", base + "^{commit}"),
                                 capture_output=True, check=False).returncode == 0
         if exists:
             counts = _git(root, "rev-list", "--left-right", "--count", "HEAD..." + base).decode().split()
@@ -157,23 +204,29 @@ def _on_kontrol(root, config):
             freshness["durum"] = "ayrismis" if ahead and behind else "geride" if behind else "ileride" if ahead else "guncel"
             timestamp = int(_git(root, "show", "-s", "--format=%ct", base).decode())
             freshness["taban_ref_yasi_saniye"] = max(0, int(time.time()) - timestamp)
-            remote = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
-                                    capture_output=True, text=True, check=False)
+            remote = subprocess.run(_git_komutu(root, "remote", "get-url", "origin"),
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                    check=False)
             remote_url = remote.stdout.strip()
             remote_path = (Path(remote_url.removeprefix("file://")).expanduser()
                            if remote.returncode == 0 and (remote_url.startswith("file://")
                                                          or "://" not in remote_url) else None)
+            if uyum.WINDOWS and remote.returncode == 0 and remote_url.startswith("file://"):
+                # `file:///C:/depo` → `C:\depo` (`removeprefix` başta bir eğik çizgi bırakırdı).
+                from urllib.parse import unquote, urlparse
+                remote_path = Path(unquote(urlparse(remote_url).path).lstrip("/"))
             if base.startswith("origin/") and remote_path and remote_path.exists():
                 branch = base.removeprefix("origin/")
                 live = subprocess.run(["git", "ls-remote", str(remote_path), "refs/heads/" + branch],
-                                      capture_output=True, text=True, check=False)
+                                      capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                      check=False)
                 live_hash = live.stdout.split()[0] if live.returncode == 0 and live.stdout.split() else None
                 cached_hash = _git(root, "rev-parse", base + "^{commit}").decode().strip()
                 if live_hash and live_hash != cached_hash:
                     freshness["kaynak"] = "yerel-origin"
                     timestamp_result = subprocess.run(
-                        ["git", "-C", str(remote_path), "show", "-s", "--format=%ct", live_hash],
-                        capture_output=True, text=True, check=False)
+                        _git_komutu(remote_path, "show", "-s", "--format=%ct", live_hash),
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
                     if timestamp_result.returncode == 0:
                         freshness["taban_ref_yasi_saniye"] = max(
                             0, int(time.time()) - int(timestamp_result.stdout.strip()))
@@ -202,13 +255,15 @@ def _on_kontrol(root, config):
             tools.append({"komut": None, "bulundu": False, "kaynak": "ayrıştırılamadı"})
             warnings.append(f"Doğrulama komutu ayrıştırılamadı: {command!r}")
             continue
-        if "/" in item:
+        if "/" in item or (uyum.WINDOWS and "\\" in item):
             candidate = Path(item) if Path(item).is_absolute() else root / item
             found = candidate.is_file() and os.access(candidate, os.X_OK)
             source = str(candidate)
         else:
             source = shutil.which(item)
             found = source is not None
+            if uyum.WINDOWS and found and "\\windowsapps\\" in source.lower():
+                found = False  # Microsoft Store takma adı (`python3.exe` vb.) gerçek bir yürütücü değildir
         tools.append({"komut": item, "bulundu": found, "kaynak": source})
         if not found:
             warnings.append(f"Doğrulama aracı bulunamadı: {item}")
@@ -225,8 +280,9 @@ def _on_kontrol(root, config):
 
 
 def _project(root, command, *args):
-    result = subprocess.run([sys.executable, str(Path(root) / ".project/scripts/project.py"),
+    result = subprocess.run([*uyum_komut.python_argv(), str(Path(root) / ".project/scripts/project.py"),
                              command, str(root), *map(str, args)], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", env=_alt_surec_ortami(),
                             stdin=subprocess.DEVNULL, timeout=30)
     try:
         value = json.loads(result.stdout)
@@ -310,15 +366,15 @@ def _plan_contract(plan):
 def _lock(session):
     root = _root(session)
     root.mkdir(parents=True, exist_ok=True)
-    with (root / ".proje.lock").open("a+") as stream:
+    with (root / ".proje.lock").open("a+", encoding="utf-8") as stream:
         try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            uyum.kilitle(stream, bekle=False)
         except BlockingIOError as exc:
             raise ValueError("another project controller is running") from exc
         try:
             yield
         finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            uyum.kilit_birak(stream)
 
 
 def suggestions(root, maximum=None):
@@ -355,7 +411,7 @@ import json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import derive
-state = json.loads(Path(sys.argv[2]).read_text())
+state = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
 context = derive._CodeContext(state)
 records = {}
 for task in state['tasks']:
@@ -372,9 +428,10 @@ for task in state['tasks']:
         records[task['id']] = record
 print(json.dumps({'revision': state['revision'], 'records': records}))
 """
-    result = subprocess.run([sys.executable, '-B', '-c', code,
+    result = subprocess.run([*uyum_komut.python_argv(), '-B', '-c', code,
                              str(root / '.project/scripts'), str(root / '.project/state.json')],
-                            capture_output=True, text=True, input='', timeout=30)
+                            capture_output=True, text=True, encoding='utf-8', errors='replace',
+                            env=_alt_surec_ortami(), input='', timeout=30)
     if result.returncode:
         raise ValueError('verification metadata failed: ' + result.stderr[-1000:])
     return json.loads(result.stdout)
@@ -538,7 +595,11 @@ def _verify(root, selected, maximum, execute, timeout):
         if current['status'] in ('todo', 'review'):
             _event(root, {'action': 'start_task'}, job['task'])
     # Only workers run in processes; all record actions stay in this locked writer.
-    with ProcessPoolExecutor(max_workers=maximum, mp_context=multiprocessing.get_context('fork')) as pool:
+    # Windows'ta `fork` yok; `spawn` ise ana modülü yeniden içe aktarır. Kulvarlar git/alt süreç işi olduğu için
+    # orada iş parçacığı havuzu yeterli ve güvenlidir.
+    havuz = (ThreadPoolExecutor(max_workers=maximum) if uyum.WINDOWS else
+             ProcessPoolExecutor(max_workers=maximum, mp_context=multiprocessing.get_context('fork')))
+    with havuz as pool:
         pending = []
         for mode, group in groups:
             if mode == 'serial':
@@ -597,7 +658,7 @@ def _refresh_graph(project, execution, *, skipped=False, staging=None):
         snapshot = Path(temporary) / "execution"
         _git(execution, "clone", "--no-hardlinks", "--", str(execution), str(snapshot))
         managed = snapshot / ".project"
-        if managed.is_symlink():
+        if uyum.baglanti_mi(managed):
             raise ValueError("symbolic managed execution record forbidden")
         if managed.exists():
             shutil.rmtree(managed)  # Only the disposable git copy, never the execution repository.
@@ -638,7 +699,7 @@ def _prepare(session, config_path, *, graph, staging, conflict_override):
         raise ValueError("unsupported project execution configuration")
     project, execution = _root(config["project"]), _root(config["execution_repo"])
     roots = (session, project, execution)
-    if any(a == b or a.is_relative_to(b) or b.is_relative_to(a)
+    if any(_goreli_mi(a, b) or _goreli_mi(b, a)
            for index, a in enumerate(roots) for b in roots[index + 1:]):
         raise ValueError("session, project and execution repository must be separate siblings")
     policy = config["policy"]
@@ -665,7 +726,7 @@ def _prepare(session, config_path, *, graph, staging, conflict_override):
         policy["claude"] = str(Path(binary).resolve())
     _git(execution, "var", "GIT_AUTHOR_IDENT")
     _git(execution, "var", "GIT_COMMITTER_IDENT")
-    if _git(execution, "rev-parse", "--show-toplevel").decode().strip() != str(execution):
+    if not _ayni_yol(_git(execution, "rev-parse", "--show-toplevel").decode().strip(), execution):
         raise ValueError("execution root must be a git root")
     if _git(execution, "branch", "--show-current").decode().strip() != "main":
         raise ValueError("execution repository must be on main")
@@ -1062,7 +1123,7 @@ def scratch_directory(session):
     if not load(session):
         return []
     path = _root(session) / "scratch"
-    if path.is_symlink():
+    if uyum.baglanti_mi(path):
         raise ValueError("scratch directory must not be a symlink")
     path.mkdir(exist_ok=True)
     return [str(path)]
@@ -1070,7 +1131,12 @@ def scratch_directory(session):
 
 def execution_environment(session):
     directories = scratch_directory(session)
-    return {**os.environ, "TMPDIR": directories[0]} if directories else None
+    if not directories:
+        return None
+    ortam = {**os.environ, "TMPDIR": directories[0]}
+    if uyum.WINDOWS:  # Windows araçları TMPDIR'i değil TEMP/TMP'yi okur
+        ortam.update(TEMP=directories[0], TMP=directories[0])
+    return ortam
 
 
 def _command(command, cwd, timeout, *, session):
@@ -1186,8 +1252,9 @@ def sync(session, task_id):
             with tempfile.NamedTemporaryFile("wb", dir=target.parent, delete=False) as stream:
                 stream.write(content)
                 temporary = stream.name
-            os.chmod(temporary, mode)
-            os.replace(temporary, target)
+            if uyum.izin_biti_anlamli_mi():
+                os.chmod(temporary, mode)
+            uyum.degistir(temporary, target)
         state["published_files"][item["path"]] = item["after"]
     state["execution_head"] = head
     guard(session, task_id)
@@ -1252,7 +1319,7 @@ def _started_task_rollback(session, root, task_id, before):
             stream.flush()
             os.fsync(stream.fileno())
             temporary = stream.name
-        os.replace(temporary, path)
+        uyum.degistir(temporary, path)
         return True
     state = _read(Path(session) / STATE)
     state["yarim_baslatma"] = {
@@ -1345,7 +1412,7 @@ def retry(session, task_id, reason):
         executor = Yurutme(session)
         executor._olay("proje_yeniden_dene", task_id, is_turu="yeniden_is_kapsami",
                        gerekce=reason, teshis_sinifi=diagnosis["sinif"], digest=binding["digest"])
-        with (Path(session) / "yurutme/engeller.jsonl").open("a", encoding="utf-8") as stream:
+        with (Path(session) / "yurutme/engeller.jsonl").open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"gorev": task_id, "durum": "cozuldu", "neden": reason,
                                      "t": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False) + "\n")
         return {"gorev": task_id, "durum": "hazir", "digest": binding["digest"],
@@ -1389,6 +1456,7 @@ def main(argv=None):
     stopper.add_argument("session")
     stopper.add_argument("--reason", required=True)
     args = parser.parse_args(argv)
+    _konsol_utf8()
     try:
         if args.command == "hazirla":
             result = prepare(args.session, args.config, graph=not args.graf_yok, conflict_override=args.cakismayi_kabul_et)
