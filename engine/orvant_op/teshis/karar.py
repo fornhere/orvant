@@ -8,7 +8,7 @@ from math import ceil
 from orvant_op.mimar.kusurlu import negatif_kontrol
 
 SINIFLAR = (
-    "butce_modeli", "plan_sozlesmesi", "sozlesme_anlami", "yasam_dongusu", "baglam_eksik",
+    "butce_modeli", "plan_sozlesmesi", "sozlesme_anlami", "yasam_dongusu", "baglam_eksik", "kurulum",
     "ortam_gozlem", "arac_eksik", "kabul_celiskisi", "girdi_bekleme", "kod_hatasi", "gecici_altyapi",
     "dogrulayici_kusuru", "orvant_kusuru", "gecici_artik", "isci_goal_kapanmadi", "bilinmeyen",
 )
@@ -85,6 +85,9 @@ def teshis_et(baglam):
     onceki_teshisler, toplam_tokens, envanter, isci_kostu,
     istisna_turu ve orvant_surumu alanlarını taşıyabilir.
     """
+    # Yerel import teşhis ↔ yürütme paket başlangıç döngüsünü önler.
+    from orvant_op.yurutme.gecis import teshis_eylemi
+
     makbuz = baglam.get("makbuz") or {}
     gorev = baglam.get("gorev") or {}
     hatalar = list(makbuz.get("hatalar") or [])
@@ -105,7 +108,15 @@ def teshis_et(baglam):
     kotu_komut = [k for k in komutlar if k.get("exit_code") != 0 or k.get("zaman_asimi")]
     komut_metni = " ".join(str(k.get("cikti_kuyrugu") or "").casefold() for k in komutlar)
     hata_metni = " ".join(str(k.get("cikti_kuyrugu") or "").casefold() for k in kotu_komut)
-    if _var(ozet, "claude code oturumu geçersiz", "codex oturumu geçersiz"):
+    manifest = baglam.get("yetenek_manifesti") or makbuz.get("yetenek_manifesti") or {}
+    gozlem_ortami = manifest.get("gozlem_ortami") or {}
+    kapi_ortami = manifest.get("kapi_ortami") or {}
+    ortam_farki = (gozlem_ortami.get("ortam") and kapi_ortami.get("ortam")
+                   and gozlem_ortami.get("ortam") != kapi_ortami.get("ortam"))
+    if (baglam.get("isci_kostu") is False
+            and _var(ozet, "workspace setup failed", "çalışma alanı kurulumu başarısız")):
+        sinif, eylem, hipotez = "kurulum", "yeniden_dene", "Kurulum komutu işçi başlamadan başarısız oldu"
+    elif _var(ozet, "claude code oturumu geçersiz", "codex oturumu geçersiz"):
         sinif, eylem, hipotez = "ortam_gozlem", "yetki_bekle", "Model CLI kimlik doğrulaması veya oturumu geçersiz"
     elif (baglam.get("istisna") and baglam.get("isci_kostu") is False
             and baglam.get("istisna_turu") not in ("ValueError", "TimeoutExpired", "YurutucuZamanAsimi")
@@ -138,9 +149,12 @@ def teshis_et(baglam):
     elif arac_sinyali and adaylar and (not kotu_komut or _var(ozet, "permission denied", "read-only file system")):
         sinif, eylem, hipotez = "arac_eksik", "yeniden_planla", "Araç envanteri veya kurulum yetkisi gerekli"
     elif _var(ozet, "doğrulanamadı", "görünmüyor", "not visible") and _var(ozet, "sandbox", "aygıt", "device"):
-        sinif, eylem, hipotez = "ortam_gozlem", "yeniden_denetle", "Sandbox gözlemi dış ortam kanıtı değildir"
+        sinif, eylem = "ortam_gozlem", "yeniden_denetle"
+        hipotez = ("işçi/host ortamı ile kapı sandbox ortamı farklıdır; "
+                   "kapı gözlemi host kanıtını çürütemez" if ortam_farki else
+                   "Sandbox gözlemi dış ortam kanıtı değildir")
     elif _var(ozet, "permission denied", "sandbox denied", "outside writable", "read-only file system", "operation not permitted"):
-        sinif, eylem, hipotez = "ortam_gozlem", "yetki_bekle", "Ortam veya yazma yetkisi engeli"
+        sinif, eylem, hipotez = "ortam_gozlem", teshis_eylemi("yetki_bekleme"), "Ortam veya yazma yetkisi engeli"
     elif kotu_komut and (_var(hata_metni, "can't open file", "invalid choice", "unrecognized arguments", "usage:")
                            or re.search(r"(?:\.py|\.sh|/[^\s:]+): (?:no such file or directory|not found)", hata_metni)
                            or ("no such file or directory" in hata_metni and
@@ -154,7 +168,7 @@ def teshis_et(baglam):
           (_var(ozet, "kabul ölçüt", "acceptance criter") and
            _var(ozet, "kullanıcı karar", "user decision", "user's decision") and
            _var(ozet, "çeliş", "conflict", "contradict"))):
-        sinif, eylem, hipotez = "kabul_celiskisi", "yukselt", "Kabul ölçütü ile kullanıcı kararı veya ölçüm kanıtı çelişiyor"
+        sinif, eylem, hipotez = "kabul_celiskisi", teshis_eylemi("kabul_celiskisi"), "Kabul ölçütü ile kullanıcı kararı veya ölçüm kanıtı çelişiyor"
     # Tamamlandı diyen, kapı/hata kanıtı taşımayan yalın bir özet onarıma yetmez.
     elif ((arac_sinyali and not kotu_komut and (hatalar or komutlar or durum == "blocked" or kehanet.get("gecti") is False
                                               or "yerel_yontem_yok" in ozet)) or
@@ -165,7 +179,7 @@ def teshis_et(baglam):
     elif durum == "blocked" and baglam.get("istenen_bagimli_ciktilar"):
         sinif, eylem, hipotez = "baglam_eksik", "yeniden_dene", "İstenen girdi kabul edilmiş bağımlı çıktı olarak mevcut"
     elif durum == "blocked" and _var(ozet, "kullanıcı", "girdi", "dosya gerekli", "karar gerekli", "input required", "provide"):
-        sinif, eylem, hipotez = "girdi_bekleme", "girdi_bekle", "İşçi dış girdi beklediğini bildirdi"
+        sinif, eylem, hipotez = "girdi_bekleme", teshis_eylemi("girdi_bekleme"), "İşçi dış girdi beklediğini bildirdi"
     elif _var(ozet, "rate limit", "429", "network", "connection", "timed out", "timeout", "zaman aşımı", "temporary failure") or any(k.get("zaman_asimi") for k in komutlar):
         sinif, eylem, hipotez = "gecici_altyapi", "yeniden_dene", "Geçici altyapı veya zaman aşımı"
     elif durum == "budget_limited":
@@ -240,8 +254,13 @@ def teshis_et(baglam):
                 {"kaynak": "makbuz", "alan": "hatalar", "deger": hatalar},
                 {"kaynak": "makbuz", "alan": "komut_sonuclari", "deger": kotu_komut},
                 {"kaynak": "makbuz", "alan": "kapsam_ihlalleri", "deger": ihlaller}]
+    if sinif == "ortam_gozlem" and ortam_farki:
+        kanitlar.append({"kaynak": "yetenek_manifesti", "alan": "ortam_farki",
+                        "deger": manifest})
     if baglam.get("istisna"):
         kanitlar.append({"kaynak": "s3", "alan": "istisna", "deger": baglam["istisna"]})
+    if sinif == "kurulum":
+        kanitlar.append({"kaynak": "s3", "alan": "isci_kostu", "deger": False})
     if baglam.get("artik_incelemesi") is not None:
         kanitlar.append({"kaynak": "s3", "alan": "artik_incelemesi", "deger": baglam["artik_incelemesi"]})
     if sinif == "baglam_eksik" and baglam.get("istenen_bagimli_ciktilar"):
@@ -251,6 +270,8 @@ def teshis_et(baglam):
              "hipotez": hipotez, "kanitlar": kanitlar, "eylem": eylem,
              "gerekce": hipotez, "imza": imza, "kanit_ozeti": kanit_ozeti,
              "orvant_surumu": surum}
+    if sinif == "kurulum":
+        sonuc.update(oneri="kurulum komutunu düzelt ve yeniden dene", deneme_iadesi=True)
     if sinif == "butce_modeli" and ilerleme_var:
         from orvant_op.butce import butce_tabani
         eski = (gorev.get("butce") or {}).get("token", 0)
