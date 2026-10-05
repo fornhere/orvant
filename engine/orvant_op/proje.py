@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import tomllib
+from datetime import datetime, timezone
 from concurrent.futures import ProcessPoolExecutor
 
 BINDING = "proje.json"
@@ -144,7 +145,7 @@ def _on_kontrol(root, config):
     setting = _proje_on_kontrol_ayari(root)
     mode = setting.get("guncellik", "uyar")
     base = setting.get("taban_ref") or _varsayilan_taban_ref(root)
-    freshness = {"durum": "bilinmiyor", "taban_ref": base, "kip": mode}
+    freshness = {"durum": "bilinmiyor", "taban_ref": base, "kip": mode, "kaynak": "yerel-ref"}
     warnings, blockers = [], []
     if base:
         exists = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", base + "^{commit}"],
@@ -153,10 +154,37 @@ def _on_kontrol(root, config):
             counts = _git(root, "rev-list", "--left-right", "--count", "HEAD..." + base).decode().split()
             ahead, behind = map(int, counts)
             freshness.update(ileride=ahead, geride=behind)
-            freshness["durum"] = "ayrismis" if ahead and behind else "geride" if behind else "guncel"
+            freshness["durum"] = "ayrismis" if ahead and behind else "geride" if behind else "ileride" if ahead else "guncel"
+            timestamp = int(_git(root, "show", "-s", "--format=%ct", base).decode())
+            freshness["taban_ref_yasi_saniye"] = max(0, int(time.time()) - timestamp)
+            remote = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                                    capture_output=True, text=True, check=False)
+            remote_url = remote.stdout.strip()
+            remote_path = (Path(remote_url.removeprefix("file://")).expanduser()
+                           if remote.returncode == 0 and (remote_url.startswith("file://")
+                                                         or "://" not in remote_url) else None)
+            if base.startswith("origin/") and remote_path and remote_path.exists():
+                branch = base.removeprefix("origin/")
+                live = subprocess.run(["git", "ls-remote", str(remote_path), "refs/heads/" + branch],
+                                      capture_output=True, text=True, check=False)
+                live_hash = live.stdout.split()[0] if live.returncode == 0 and live.stdout.split() else None
+                cached_hash = _git(root, "rev-parse", base + "^{commit}").decode().strip()
+                if live_hash and live_hash != cached_hash:
+                    freshness["kaynak"] = "yerel-origin"
+                    timestamp_result = subprocess.run(
+                        ["git", "-C", str(remote_path), "show", "-s", "--format=%ct", live_hash],
+                        capture_output=True, text=True, check=False)
+                    if timestamp_result.returncode == 0:
+                        freshness["taban_ref_yasi_saniye"] = max(
+                            0, int(time.time()) - int(timestamp_result.stdout.strip()))
+                    freshness["geride"] = max(1, freshness["geride"])
+                    freshness["durum"] = "ayrismis" if freshness["ileride"] else "geride"
     if freshness["durum"] in ("geride", "ayrismis"):
         message = f"Depo HEAD {base} ile karşılaştırıldığında {freshness['durum']}."
         (blockers if mode == "engelle" else warnings).append(message)
+    elif freshness["durum"] == "ileride":
+        # Yerel commit'ler tabanın gerisinde kalmayı göstermez; engellemez, bilgi verir.
+        warnings.append(f"Depo HEAD {base} tabanından {freshness.get('ileride', 0)} commit ileride (yerel değişiklik).")
     elif freshness["durum"] == "bilinmiyor":
         warnings.append(f"Depo güncelliği bilinmiyor: yerel {base or 'yukarı akış'} ref'i yok; fetch yapılmadı.")
 
@@ -1294,6 +1322,36 @@ def run(session, *, execute=False, worker=None, goals_db=None):
         return {"results": results, "status": status(session)}
 
 
+def retry(session, task_id, reason):
+    """İşçi başlamadan oluşan çevresel engeli mevcut onayı değiştirmeden aç."""
+    if not reason.strip():
+        raise ValueError("yeniden deneme nedeni gerekli")
+    from .yurutme import Yurutme
+    with _lock(session):
+        binding = guard(session, task_id)
+        plan = _read(Path(session) / "plan/plan.json")
+        task = next((g for g in plan["gorevler"] if g["id"] == task_id), None)
+        records_path = Path(session) / "yurutme/teshis.jsonl"
+        records = ([json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()]
+                   if records_path.exists() else [])
+        diagnosis = next((r for r in reversed(records) if r.get("gorev") == task_id), None)
+        receipts = list((Path(session) / "yurutme/makbuzlar").glob(f"{task_id}-[0-9]*.json"))
+        if (task is None or task.get("durum") != "engelli" or not diagnosis
+                or diagnosis.get("sinif") not in ("kurulum", "ortam_gozlem", "arac_eksik")
+                or diagnosis.get("isci_kostu") is not False or receipts):
+            raise ValueError("işçi koşmuş veya çevresel olmayan deneme için yeniden onay gerekir")
+        task["durum"] = "hazir"
+        _write(Path(session) / "plan/plan.json", plan)
+        executor = Yurutme(session)
+        executor._olay("proje_yeniden_dene", task_id, is_turu="yeniden_is_kapsami",
+                       gerekce=reason, teshis_sinifi=diagnosis["sinif"], digest=binding["digest"])
+        with (Path(session) / "yurutme/engeller.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"gorev": task_id, "durum": "cozuldu", "neden": reason,
+                                     "t": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False) + "\n")
+        return {"gorev": task_id, "durum": "hazir", "digest": binding["digest"],
+                "deneme_harcanmadi": True}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="orvant proje")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1320,6 +1378,10 @@ def main(argv=None):
     runner = commands.add_parser("surdur")
     runner.add_argument("session")
     runner.add_argument("--execute", action="store_true", help="Explicitly permit approved paid worker calls")
+    retry_parser = commands.add_parser("yeniden-dene")
+    retry_parser.add_argument("session")
+    retry_parser.add_argument("--gorev", required=True)
+    retry_parser.add_argument("--neden", required=True)
     synchronizer = commands.add_parser("esitle")
     synchronizer.add_argument("session")
     synchronizer.add_argument("task")
@@ -1338,6 +1400,8 @@ def main(argv=None):
             result = approve(args.session, args.digest, args.reason)
         elif args.command == "surdur":
             result = run(args.session, execute=args.execute)
+        elif args.command == "yeniden-dene":
+            result = retry(args.session, args.gorev, args.neden)
         elif args.command == "esitle":
             with _lock(args.session):
                 result = sync(args.session, args.task)

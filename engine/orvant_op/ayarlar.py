@@ -35,6 +35,11 @@ Dosya biçimi::
     [operator]
     kota_esigi = 80             # isteğe bağlı; yoksa kapalı (ortam: ORVANT_KOTA_ESIGI, "kapali")
 
+    [olcer]
+    proje_oturumlari = [        # glob, bu dosyanın dizinine göre çözülür
+      {proje = "ornek", yol = "../oturumlar/ornek-*"},
+    ]
+
 Modül yalnız standart kitaplığı kullanır ve orvant_op/orvant_gelisim içinden hiçbir şey
 içe aktarmaz; böylece her katman (orvant_gelisim.kayit dahil) döngüsüz kullanabilir.
 Çağrı yerleri bu modülden çalışma anında çözülür.
@@ -82,7 +87,7 @@ def _oku(yol):
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
-    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon"):
+    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon", "olcer"):
         if bolum in veri and not isinstance(veri[bolum], dict):
             raise AyarHatasi(f"{yol}: [{bolum}] tablo olmalı")
     return veri
