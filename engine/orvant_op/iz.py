@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from orvant_gelisim import kayit
-from orvant_gelisim.kayit import olay, yaz
+from orvant_gelisim.kayit import olay, olay_kokeni_ekle, yaz
 
 _eski_surum_cozucu = kayit.orvant_surumu
 KOK = Path(__file__).resolve().parents[1]
@@ -133,6 +133,7 @@ def kaydet(iz_yolu, proje, is_turu, *, aktor_tur="orvant", kimlik="karsilama",
                     kanit=kanit, maliyet=maliyet, ham=ham, orvant_surumu=surum,
                     onerdi=onerdi, karar_verdi=karar_verdi, uyguladi=uyguladi,
                     mudahale_bolumu=mudahale_bolumu)
+        item = olay_kokeni_ekle(item, surum)
         anahtar = (str(Path(yol).resolve()), item["proje"])
         operator = aktor_tur == "orvant" and kimlik == "operator"
         if aktor_tur in {"orvant", "codex", "claude"} and kimlik != "operator":
