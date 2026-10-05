@@ -216,7 +216,12 @@ class Mimar:
         isaretler = _oku(isaret_yolu) if isaret_yolu.exists() else {}
         isaretler[gorev_id] = {"durum": "yeniden_uretilmeli", "kabul_degisikligi": kd, "t": t}
 
-        gorev["butce"]["deneme"] += 1
+        # Yerel import mimar ↔ yürütme paket başlangıç döngüsünü önler.
+        from orvant_op.yurutme.gecis import gecis_uygula
+        gecis = gecis_uygula("kabul_celiskisi", "kabul_degisikligi", onay_olay_id,
+                             deneme=eski_deneme, kullanilan_deneme=eski_deneme,
+                             islenmis_kanitlar=(k["onay_olay_id"] for k in kayitlar))
+        gorev["butce"]["deneme"] = gecis["deneme"]
         kayit["deneme"] = {"eski": eski_deneme, "yeni": gorev["butce"]["deneme"]}
 
         # Bütün doğrulamalar yukarıda: reddedilen istek hiçbir kalıcı kaydı değiştirmez.
