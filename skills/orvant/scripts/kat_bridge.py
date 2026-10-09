@@ -90,7 +90,7 @@ def _kurali_dogrula(kural, gorulen, derinlik=0):
             _kurali_dogrula(alt, gorulen, derinlik + 1)
 
 
-def _kontrol(state, kural, gozlemler, kontroller):
+def _kontrol(state, kural, gozlemler, kontroller, count_araligi=False):
     op = kural.get("op")
     if op not in ORTAK_ISLEMLER:
         raise ValueError("ortak olmayan acceptance işlemi")
@@ -100,13 +100,13 @@ def _kontrol(state, kural, gozlemler, kontroller):
             gozlemler[gozlem_adi] = _sec(state, kural["left"])
             beklenen = _sec(state, kural["right"])
         elif op == "count":
-            if kural["max"] is None or kural["min"] != kural["max"]:
+            if not count_araligi and (kural["max"] is None or kural["min"] != kural["max"]):
                 raise ValueError("KAT say işlemi için kesin sayım (min == max) gerekli")
             gozlemler[gozlem_adi] = _sec(state, kural["selector"])
             beklenen = kural["min"]
         else:
             baslangic = len(kontroller)
-            altlar = [_kontrol(state, alt, gozlemler, kontroller) for alt in kural["rules"]]
+            altlar = [_kontrol(state, alt, gozlemler, kontroller, count_araligi) for alt in kural["rules"]]
             gozlemler[gozlem_adi] = [_islet(k, gozlemler[k["gozlem"]]) for k in altlar]
             beklenen = True
             # KAT v1'de bağımlı/diagnostik kontrol kavramı yoktur ve kapı bütün
@@ -135,17 +135,46 @@ def _kontrol(state, kural, gozlemler, kontroller):
         kontrol = {"id": kural["id"], "gozlem": gozlem_adi,
                    "islem": "kume_esit", "beklenen": beklenen,
                    "uygulayici": "kat-stdlib-v1"}
+    if op == "count" and count_araligi:
+        # Aralık say işleminin kesin sayımına daraltılmaz. Bildirimin tamamı
+        # hash'e girer; sınırlar seçilen nesne sayısına bire bir uygulanır.
+        if kontrol["islem"] == "say":
+            sayi = len(gozlemler[gozlem_adi])
+            gecti = sayi >= kural["min"] and (kural["max"] is None or sayi <= kural["max"])
+        else:
+            gecti = False
+        gozlemler[gozlem_adi] = [kural, gecti]
+        kontrol.update(islem="kume_esit", beklenen=[kural, True])
     kontrol.update(dayanak_ids=[kural["id"]], alinti=kural["id"])
     kontroller.append(kontrol)
     return kontrol
 
 
-def kuraldan_kat(state, kural, *, gorev):
+def kuraldan_kat(state, kural, *, gorev, count_araligi=False):
     """Tek acceptance kuralını ve gözlemini ortak KAT cebirine derler."""
     _kurali_dogrula(kural, set())
     gozlemler = {}
     kontroller = []
-    _kontrol(state, kural, gozlemler, kontroller)
+    _kontrol(state, kural, gozlemler, kontroller, count_araligi)
+    kat = {"kat_surumu": 1, "gorev": gorev, "kapsam": {"yazilabilir": []},
+           "kontroller": kontroller, "kat_sha256": ""}
+    kat["kat_sha256"] = kat_hash(kat)
+    return kat, gozlemler
+
+
+def kurallardan_kat(state, kurallar, *, gorev):
+    """Proje listesini AND ile bağlar; sentetik kök kullanıcı derinliği sayılmaz."""
+    if type(kurallar) is not list or not kurallar:
+        raise ValueError("acceptance kuralları dolu liste olmalı")
+    kimlikler = set()
+    for kural in kurallar:
+        _kurali_dogrula(kural, kimlikler)
+    kok_id = "KAT-proje-kok"
+    while kok_id in kimlikler:
+        kok_id += "-"
+    kok = {"id": kok_id, "label": "Project rules", "op": "all", "rules": kurallar}
+    gozlemler, kontroller = {}, []
+    _kontrol(state, kok, gozlemler, kontroller, count_araligi=True)
     kat = {"kat_surumu": 1, "gorev": gorev, "kapsam": {"yazilabilir": []},
            "kontroller": kontroller, "kat_sha256": ""}
     kat["kat_sha256"] = kat_hash(kat)
@@ -186,6 +215,11 @@ def dosyadan_yorumla(yol, gozlemler):
                              ValueError(f"sonlu olmayan sayı: {sabit}")))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"KAT okunamadı: {exc}") from exc
+    return yorumla(kat, gozlemler)
+
+
+def yorumla(kat, gozlemler):
+    """Kapı tarafından toplanmış ontology gözlemlerini yorumlar."""
     _kat_dogrula(kat)
     sonuclar = []
     for kontrol in kat["kontroller"]:
