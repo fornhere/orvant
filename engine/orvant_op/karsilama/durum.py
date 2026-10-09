@@ -65,12 +65,30 @@ BOYUTLAR = {
     6: "Yetki kapsamı", 7: "Bütçe ve durma kuralı", 8: "Çıktı/kurulum konumu",
     9: "Mevcut araç ve yetenekler",
 }
+IC_TERIM_DESENLERI = (
+    r"\bçelişkili olarak işaretlen\w*\b",
+    r"\b(?:dayanak\s+iddia\w*|iddia\s+(?:kimliği|kaynağı)\w*)\b",
+    r"\bkarar haritas\w*\b",
+)
 
 
 def _bilesik_soru_mu(metin):
     """Ayrı yanıt isteyen, noktalama ile birleştirilmiş soru cümlelerini bulur."""
     metin = metin.strip()
     return metin.count("?") > 1 or (";" in metin and metin.endswith("?"))
+
+
+def _ic_terim_iceriyor_mu(metin, karar_ids=()):
+    """Kullanıcı gerekçesine sızan dar iç durum sözlüğünü denetler."""
+    metin = metin.replace("İ", "i").replace("I", "ı").lower()
+    if any(re.search(desen, metin) for desen in IC_TERIM_DESENLERI):
+        return True
+    # Kimlikler doğal metinde de geçebilir; yalnız açık karar bağlamını yakala.
+    return any(re.search(
+        rf"(?:\(\s*{re.escape(kimlik.lower())}\s*\)|"
+        rf"\b{re.escape(kimlik.lower())}\s+karar\w*\b|"
+        rf"\bkarar\w*\s+{re.escape(kimlik.lower())}\b)", metin)
+        for kimlik in karar_ids)
 
 
 def _kullanici_ortami_mi(metin):
@@ -117,7 +135,8 @@ class Karsilama:
         self.calisma = Path(calisma).resolve()
         self.kok = self.calisma / "karsilama"
         self.yurutucu = yurutucu
-        self.iz_yolu = iz_yolu
+        from orvant_op.iz import oturum_iz_yolu
+        self.iz_yolu = oturum_iz_yolu(self.calisma, iz_yolu)
 
     def oku(self, ad):
         return _oku_json(self.kok / f"{ad}.json", [] if ad in ("iddialar", "kararlar", "sorular") else {})
@@ -134,10 +153,10 @@ class Karsilama:
                  "tur": tur, "aktor": aktor, "metin": metin, "veri": veri or {}}
         with (self.kok / "olaylar.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
-        kaydet(self.iz_yolu, self.calisma.name, is_turu, aktor_tur=aktor,
+        kaydet(self.iz_yolu, self.calisma.name, is_turu, calisma=self.calisma, aktor_tur=aktor,
                kimlik="karsilama" if aktor == "orvant" else "kullanici",
                sonuc=sonuc, ozet=tur, maliyet={"insan_dakika": insan_dakika},
-               ham={"olay_id": entry["id"]})
+               ham={"olay_id": entry["id"], "olay_turu": entry["tur"]})
         return entry
 
     def _karar_haritasi_uygula(self, gelenler):
@@ -262,6 +281,9 @@ class Karsilama:
                 continue  # Mevcut kullanıcı kararı aynen kalır; modelin yeni dayanağı uygulanmaz.
             if _bilesik_soru_mu(k["soru"]["metin"]):
                 hatalar.append(f"{kimlik}: bileşik soru ayrı atomik kararlara bölünmeli")
+            karar_ids = {karar["id"] for karar in kararlar} | {karar["id"] for karar in gelenler}
+            if _ic_terim_iceriyor_mu(k["soru"]["neden_onemli"], karar_ids):
+                hatalar.append(f"{kimlik}: soru gerekçesi kullanıcıya gösterilmeyen iç terim içeriyor")
             if iddia_ids is not None and not set(k["dayanak_iddia_ids"]) <= iddia_ids:
                 hatalar.append(f"{kimlik}: karar haritasında bilinmeyen iddia kaynağı: "
                               f"{sorted(set(k['dayanak_iddia_ids']) - iddia_ids)}")
@@ -556,7 +578,7 @@ class Karsilama:
     def sorular(self):
         return [s for s in self.oku("sorular") if s["durum"] == "acik"]
 
-    def cevapla(self, soru_id, metin, *, dakika=None, yer_tutucu_kabul=False):
+    def cevapla(self, soru_id, metin, *, dakika=None, yer_tutucu_kabul=False, kaynak=None):
         if self.oku("oturum")["durum"] != "soru_bekliyor":
             raise ValueError("cevap beklenmiyor")
         sorular = self.oku("sorular")
@@ -582,7 +604,10 @@ class Karsilama:
             self.yaz("sorular", sorular)
             self.olay("soru_iptal", veri={"soru_id": soru_id, "yeni_soru_ids": [s["id"] for s in yeniler]}, is_turu="hedef_netlestirme")
             raise ValueError("karar değişti; eski soru iptal edildi")
-        entry = self.olay("kullanici_cevabi", metin=metin, veri={"soru_id": soru_id, "tur": soru["tur"], "insan_dakika": dakika},
+        veri = {"soru_id": soru_id, "tur": soru["tur"], "insan_dakika": dakika}
+        if kaynak is not None:
+            veri["kaynak"] = kaynak
+        entry = self.olay("kullanici_cevabi", metin=metin, veri=veri,
                            aktor="kullanici", is_turu="hedef_netlestirme", insan_dakika=dakika)
         soru["durum"] = "cevaplandi"
         soru["cevap_olay_id"] = entry["id"]
