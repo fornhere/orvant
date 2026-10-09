@@ -96,6 +96,9 @@ class KarantinaMixin:
             return kayit["neden"]
 
     def _kapi(self, agac, gorev):
+        # Karantina erken dönüşünde temel sınıf çalışmaz; makbuz alanı yine de
+        # her kapı çağrısı için güvenli ve çağrıya özgü olmalıdır.
+        self._son_kapi_tekrarlari = []
         with self._kilit():
             neden = self._butunluk_denetle(gorev)
             if neden:

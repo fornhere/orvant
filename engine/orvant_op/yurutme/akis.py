@@ -3,12 +3,12 @@ import contextlib
 import fcntl
 import hashlib
 import json
-import multiprocessing
 import os
 import re
 import shlex
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import uuid
 from contextlib import closing
@@ -23,38 +23,18 @@ from orvant_op.mimar.dogrulama import durumlari_hesapla, kalip_eslesir
 from orvant_op.mimar.durum import izin_yolu_dogrula
 from orvant_op.mimar.kehanet import Kehanet, calistir_kehanet, kehanet_yolu, okunabilir_girdiler, olcutler
 from orvant_op.mimar.kehanet import kehanet_gecersiz_mi, sozlesme_yolu
-from orvant_op.yurutucu import baslangic_kancasi, grup_run, hedef_calistir, komut_argv, kabuk_geri_dususu
+from orvant_op.yurutucu import (YurutucuHatasi, YurutucuKotaHatasi, YurutucuOnKontrolHatasi,
+                                YurutucuZamanAsimi,
+                                _bulut_agac_commit, baslangic_kancasi, grup_run, hedef_calistir,
+                                komut_argv, kabuk_geri_dususu)
 from orvant_op.yurutme.yetenek import manifest_uret
+from orvant_op.yurutme.kabul_ozeti import kabul_ozeti
 
 
 from orvant_op.butce import (VARSAYILAN_TABAN, butce_tabani, gorev_envanteri,
                              hesap_zaman_asimi)  # noqa: F401 (geri uyumlu dışa aktarım)
 from orvant_op import proje as proje_koprusu
 from orvant_op import ayarlar
-
-
-def _kat_kapi_isci(baglanti, anahtarlar):
-    try:
-        from orvant_op.yurutme.kat_kapi import kapi_karari
-        baglanti.send((True, kapi_karari(**anahtarlar)))
-    except BaseException as exc:
-        baglanti.send((False, f"{type(exc).__name__}: {exc}"))
-    finally:
-        baglanti.close()
-
-
-def _kat_derle_isci(baglanti, anahtarlar):
-    try:
-        from orvant_op.mimar.kat_derle import derle
-        taslaklar = anahtarlar.pop("referans_taslaklari")
-        anahtarlar["referans_gozlemleri"] = {
-            anahtar: Yurutme._kat_referans_degeri(islem, beklenen)
-            for anahtar, islem, beklenen in taslaklar}
-        baglanti.send((True, derle(**anahtarlar)))
-    except BaseException as exc:
-        baglanti.send((False, f"{type(exc).__name__}: {exc}"))
-    finally:
-        baglanti.close()
 
 
 def _json_yaz(yol, veri):
@@ -119,6 +99,29 @@ def _degisenler(agac):
             raise RuntimeError(proc.stderr.decode(errors="replace"))
         yollar.update(os.fsdecode(p) for p in proc.stdout.split(b"\0") if p)
     return sorted(yollar)
+
+
+def _agac_sha256(agac):
+    """Commit edilmemiş içerik dahil kapının gördüğü ağacı kimliklendirir."""
+    ozet = hashlib.sha256()
+    for yol in _degisenler(agac):
+        tam = agac / yol
+        ozet.update(yol.encode("utf-8") + b"\0")
+        ozet.update(tam.read_bytes() if tam.is_file() else b"<yok>")
+        ozet.update(b"\0")
+    ozet.update(_git(agac, "rev-parse", "HEAD^{tree}").stdout.strip().encode("ascii"))
+    return ozet.hexdigest()
+
+
+def _inceleme_agac_kimligi(agac):
+    """İnsan incelemesi için içerik, tür ve modu kapsayan Git ağaç kimliği üretir."""
+    with tempfile.TemporaryDirectory(prefix="orvant-agac-") as gecici:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(gecici) / "index"))
+        _git(agac, "read-tree", "HEAD", env=env)
+        # Depo/global core.filemode=false olsa da insanın incelediği gerçek
+        # yürütülebilirlik bitini geçici indekse taşı.
+        _git(agac, "-c", "core.filemode=true", "add", "-A", env=env)
+        return _git(agac, "write-tree", env=env).stdout.strip()
 
 
 def yol_butunlugu(agac, dosyalar, sozlesme=None):
@@ -211,7 +214,7 @@ def okuma_denetimi(agac, girdiler, akis):
     uyarıda kalır; sonuç bütün dosya erişimlerinin kanıtı olarak sunulmaz.
     """
     kok = Path(agac).resolve()
-    izinler = [Path(g).resolve() for g in girdiler]
+    izinler = [Path(g).resolve() for g in girdiler if isinstance(g, (str, os.PathLike))]
     okunan, dis, belirsiz = set(), [], []
     sayi = 0
     bekleyen = {}
@@ -508,17 +511,19 @@ class Yurutme:
         self.kok = self.calisma / "yurutme"
         self.yurutucu = yurutucu
         self.goals_db = goals_db
-        self.iz_yolu = iz_yolu
+        from orvant_op.iz import oturum_iz_yolu
+        self.iz_yolu = oturum_iz_yolu(self.calisma, iz_yolu)
         self.komut_zaman_asimi = komut_zaman_asimi
         self._son_kehanet_sonucu = None
         self._son_kat_golge = None
         self._katlar = {}
         self._kat_isci_kokleri = {}
+        self._kat_onay_kaynaklari = {}
         self._kat_hatalari = {}
         self._son_yol_butunlugu = {"durum": "temiz", "bulgular": []}
 
     def _iz(self, tur, ozet, *, sonuc="ok", ham=None, maliyet=None, aktor="orvant", kanit=(), gorev=None):
-        return kaydet(self.iz_yolu, self.calisma.name, tur, aktor_tur=aktor,
+        return kaydet(self.iz_yolu, self.calisma.name, tur, calisma=self.calisma, aktor_tur=aktor,
                       kimlik="yurutucu" if aktor == "orvant" else "kullanici",
                       sonuc=sonuc, ozet=ozet, ham=ham, maliyet=maliyet, kanit=kanit, gorev=gorev)
 
@@ -646,6 +651,7 @@ class Yurutme:
 
     def _kapi(self, agac, gorev):
         self._son_kat_golge = None
+        self._son_kapi_tekrarlari = []
         proje_bagi = proje_koprusu.guard(self.calisma, gorev["id"])
         if proje_bagi:
             self.komut_zaman_asimi = proje_bagi["contract"]["policy"]["command_timeout"]
@@ -662,6 +668,7 @@ class Yurutme:
             for kabul in gorev["kabul"]:
                 if kabul["tur"] != "komut":
                     continue
+                agac_sha = _agac_sha256(agac)
                 argv, gerekce = komut_argv(kabul["komut"])
                 if gerekce:
                     self._olay("kabul_komutu_kabuk", gorev["id"], komut=kabul["komut"], gerekce=gerekce)
@@ -693,12 +700,42 @@ class Yurutme:
                             "exit_code": 127 if isinstance(exc, FileNotFoundError) else 126,
                             "cikti_kuyrugu": str(exc)[-2000:], "zaman_asimi": False}
                 item["kabuk_gerekcesi"] = gerekce
+                onceki_dizi = []
+                makbuz_yollari = [*self._makbuzlar(gorev), *self._kapi_makbuzlari(gorev)]
+                for makbuz_yolu in reversed(makbuz_yollari):
+                    eski = json.loads(makbuz_yolu.read_text(encoding="utf-8"))
+                    for olcum in eski.get("kapi_tekrarlari", []):
+                        if (olcum.get("id"), olcum.get("komut"), olcum.get("agac_sha256")) == (
+                                kabul["id"], kabul["komut"], agac_sha):
+                            onceki_dizi = list(olcum.get("sonuc_dizisi", []))
+                    if onceki_dizi:
+                        break
+                ilk_sonuc = item["exit_code"] == 0 and not item["zaman_asimi"]
+                # Geçmiş yalnız kontrollü ölçümü tetikler; bu çağrının kararına
+                # katılmaz. Böylece düzelmiş bir ortam eski karışıklık yüzünden
+                # kalıcı olarak kilitlenmez ve makbuz dizisi sınırsız büyümez.
+                dizi = [ilk_sonuc]
+                if onceki_dizi and (len(set(onceki_dizi)) > 1 or onceki_dizi[-1] != ilk_sonuc):
+                    for _ in range(3):
+                        try:
+                            with baslangic_kancasi(getattr(self, "_isci_basladi", None)):
+                                tekrar = grup_run(argv, shell=False, cwd=agac,
+                                                  timeout=self.komut_zaman_asimi, env=ortam, input="")
+                            dizi.append(tekrar.returncode == 0)
+                        except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
+                            dizi.append(False)
+                    item["kararsiz"] = len(set(dizi)) > 1
+                self._son_kapi_tekrarlari.append({"id": kabul["id"], "komut": kabul["komut"],
+                    "agac_sha256": agac_sha, "sonuc_dizisi": dizi,
+                    "onceki_sonuc_dizisi": onceki_dizi})
                 komutlar.append(item)
             # Kabul komutunun yan etkileri de aynı yazılabilir kapsamın içindedir.
             degisen, ihlaller = self._kapsam(agac, gorev)
         hatalar = [f"Kapsam dışı dosya: {p}" for p in ihlaller]
         hatalar += [f"{x['id']}: çıkış={x['exit_code']}, çıktı={x['cikti_kuyrugu'][-400:]}"
                    for x in komutlar if x["exit_code"] != 0]
+        hatalar += [f"Kararsız kabul kontrolü: {x['id']} ({x['komut']})"
+                    for x in komutlar if x.get("kararsiz")]
         sozlesme = sozlesme_yolu(self.calisma, gorev["id"])
         self._son_yol_butunlugu = yol_butunlugu(
             agac, degisen, json.loads(sozlesme.read_text(encoding="utf-8")) if sozlesme.exists() else None)
@@ -732,27 +769,40 @@ class Yurutme:
             raise ValueError(f"{dosya or 'varsayılan'} [kat].{anahtar} pozitif sayı olmalı")
         return deger
 
-    def _kat_alt_surec(self, hedef, anahtarlar):
+    @staticmethod
+    def _kat_alt_surec_komutu():
+        return [sys.executable, "-m", "orvant_op.yurutme.kat_alt_surec"]
+
+    def _kat_alt_surec(self, islem, anahtarlar):
         sure = min(float(self._kat_sinir("zaman_asimi", 10)), float(self.komut_zaman_asimi))
-        baglam = multiprocessing.get_context("spawn")
-        alan, cocuk = baglam.Pipe(duplex=False)
-        surec = baglam.Process(target=hedef, args=(cocuk, anahtarlar))
-        surec.start(); cocuk.close()
+        istek = json.dumps({"islem": islem, "anahtarlar": anahtarlar},
+                           ensure_ascii=False, default=os.fspath)
+        # Çağıran orvant_op'u yalnız sys.path ile yüklemiş olabilir; alt süreç paketi aynı kökten bulsun.
+        paket_koku = str(Path(__file__).resolve().parents[2])
+        ortam = {**os.environ, "PYTHONPATH": os.pathsep.join(
+            [paket_koku, *filter(None, [os.environ.get("PYTHONPATH")])])}
+        surec = subprocess.Popen(self._kat_alt_surec_komutu(), stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 encoding="utf-8", env=ortam)
         try:
-            if not alan.poll(sure):
-                surec.terminate(); surec.join(1)
-                if surec.is_alive():
-                    surec.kill(); surec.join()
-                raise TimeoutError("zaman_asimi")
-            basarili, sonuc = alan.recv()
-            surec.join()
-            if not basarili:
-                raise RuntimeError(sonuc)
-            return sonuc
+            try:
+                cikti, hata = surec.communicate(istek, timeout=sure)
+            except subprocess.TimeoutExpired:
+                surec.terminate()
+                try:
+                    surec.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    surec.kill(); surec.communicate()
+                raise TimeoutError("zaman_asimi") from None
+            if surec.returncode:
+                raise RuntimeError(hata.strip() or f"KAT alt süreci: {surec.returncode}")
+            yanit = json.loads(cikti)
+            if yanit.get("basarili") is not True:
+                raise RuntimeError(yanit.get("hata", "KAT alt süreci başarısız"))
+            return yanit["sonuc"]
         finally:
-            alan.close()
-            if surec.is_alive():
-                surec.terminate(); surec.join()
+            if surec.poll() is None:
+                surec.terminate(); surec.wait()
 
     def _kat_golge(self, gorev_id, cikti_koku, eski_hatalar):
         eski = "ret" if eski_hatalar else "kabul"
@@ -770,16 +820,18 @@ class Yurutme:
             kat = self._katlar.get(gorev_id)
             if kat is None:
                 return {"kat_yok": "yapısal ölçüt yok"}
-            sonuc = self._kat_alt_surec(_kat_kapi_isci, {
+            sonuc = self._kat_alt_surec("kapi", {
                 "kat": kat, "cikti_koku": cikti_koku,
                 "yalitim_sonucu": self._son_kehanet_sonucu,
                 "oturum_dizini": self.calisma,
                 "isci_yazilabilir_kokler": self._kat_isci_kokleri[gorev_id],
                 "beklenen_kat_sha256": kat["kat_sha256"],
                 "beklenen_kat_surumu": kat["kat_surumu"],
+                "onay_kaynagi": self._kat_onay_kaynaklari.get(gorev_id, "s1"),
                 "azami_cikti_bayt": int(self._kat_sinir("azami_cikti_bayt", 8 * 1024 * 1024))})
             karar = "kabul" if sonuc.get("gecti") is True else "ret"
             golge = {"kat_sha256": kat["kat_sha256"], "karar": karar,
+                     "onay_kaynagi": self._kat_onay_kaynaklari.get(gorev_id, "s1"),
                      "hatalar": sonuc.get("hatalar", []), "eski_karar": eski,
                      "uyusma": karar == eski}
             if not golge["uyusma"]:
@@ -800,6 +852,7 @@ class Yurutme:
             kat = self._katlar.get(gorev_id) or {}
             hata = {"durum": "kat_hata", "karar": "ret", "kat_sha256": kat.get("kat_sha256"),
                     "eski_karar": eski, "oncelik": "yuksek",
+                    "onay_kaynagi": self._kat_onay_kaynaklari.get(gorev_id, "s1"),
                     "hata": "zaman_asimi" if isinstance(exc, TimeoutError) else f"{type(exc).__name__}: {exc}"}
             try:
                 self._olay("kat_golge_hata", gorev_id, oncelik="yuksek", hata=hata["hata"])
@@ -876,9 +929,24 @@ class Yurutme:
         """Onaylı sözleşmeden KAT'ı işçi başlamadan oturum içinde derler/saklar."""
         gorev_id = gorev["id"]
         self._kat_hatalari.pop(gorev_id, None)
+        self._kat_onay_kaynaklari[gorev_id] = "proje" if (self.calisma / "proje.json").exists() else "s1"
         try:
             if ayarlar.kat_kipi(self.calisma) == "kapali":
                 self._katlar[gorev_id] = None
+                return
+            if self._kat_onay_kaynaklari[gorev_id] == "proje":
+                bag = proje_koprusu.load(self.calisma)
+                kurallar = bag["contract"]["tasks"][gorev_id]["selection"]["definition"].get("acceptance_rules")
+                if not kurallar:
+                    self._katlar[gorev_id] = None
+                    self._olay("kat_yok", gorev_id, neden="acceptance_rules yok")
+                    return
+                kat = self._kat_alt_surec("proje_derle", {
+                    "oturum_dizini": self.calisma, "gorev": gorev_id,
+                    "isci_yazilabilir_kokler": list(map(Path, isci_yazilabilir_kokler))})
+                _json_yaz(self.calisma / "plan/kat" / f"{gorev_id}.kat.json", kat)
+                self._katlar[gorev_id] = kat
+                self._kat_isci_kokleri[gorev_id] = list(map(Path, isci_yazilabilir_kokler))
                 return
             sozlesme_yol = self.calisma / "karsilama/sozlesme.json"
             if not sozlesme_yol.exists():
@@ -905,7 +973,7 @@ class Yurutme:
                     "gozlem": {"kaynak": "cikti", "yol": yol, "alan": alan},
                     "islem": y["islem"], "beklenen": beklenen})
                 referans_taslaklari.append((anahtar, y["islem"], beklenen))
-            kat = self._kat_alt_surec(_kat_derle_isci, {
+            kat = self._kat_alt_surec("derle", {
                 "gorev": gorev_id, "kabuller": None,
                 "cikti_sozlesmesi": cikti_sozlesmesi, "kontroller": kontroller,
                 "referans_taslaklari": referans_taslaklari, "oturum_dizini": self.calisma,
@@ -915,7 +983,8 @@ class Yurutme:
             self._kat_isci_kokleri[gorev_id] = list(map(Path, isci_yazilabilir_kokler))
         except Exception as exc:
             hata = {"durum": "kat_hata", "karar": "ret", "kat_sha256": None,
-                    "oncelik": "yuksek", "hata": f"{type(exc).__name__}: {exc}"}
+                    "oncelik": "yuksek", "onay_kaynagi": self._kat_onay_kaynaklari.get(gorev_id, "s1"),
+                    "hata": f"{type(exc).__name__}: {exc}"}
             self._katlar[gorev_id] = None
             self._kat_hatalari[gorev_id] = hata
             try:
@@ -931,6 +1000,7 @@ class Yurutme:
                 "cikti_sozlesmesi": _cikti_sozlesmesi(self.calisma, gorev["id"]),
                 "yol_butunlugu": self._son_yol_butunlugu,
                 "kat_golge": self._son_kat_golge, **alanlar}
+        veri["kabul_ozeti"] = kabul_ozeti(gorev, veri)
         _json_yaz(yol, veri)
         return yol
 
@@ -978,6 +1048,33 @@ class Yurutme:
                  "durum_degisti": eski_durum != gorev["durum"]}, gorev=gorev_id)
         return {"gorev": gorev_id, "durum": gorev["durum"], "deneme": gorev["butce"]["deneme"]}
 
+    def uzlastir(self, gorev_id, sonuc):
+        """Belirsiz bulut sonucunu kullanıcı kanıtıyla açar veya mevcut ağacı kapıdan geçirir."""
+        if sonuc not in ("uygulandi", "uygulanmadi"):
+            raise ValueError("uzlaştırma sonucu uygulandi veya uygulanmadi olmalı")
+        plan = self._plan()
+        gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
+        makbuzlar = self._makbuzlar(gorev) if gorev else []
+        makbuz = json.loads(makbuzlar[-1].read_text(encoding="utf-8")) if makbuzlar else {}
+        if (not gorev or gorev["durum"] != "engelli" or makbuz.get("outcome_unknown") is not True
+                or not makbuz.get("bulut_gorev_id")):
+            raise ValueError("uzlaştırma için yapısal belirsiz bulut sonucu olan engelli görev gerekli")
+        if sonuc == "uygulandi":
+            # Kullanıcının uyguladığı ağacı, normal bulut diff yolu ile aynı G-241
+            # köken kaydına al. Gelecek deneme bu commit'i yalnız ağaç aynı kaldıysa
+            # devralır; HEAD, görev dalı ve gerçek index değişmez.
+            agac = self._agac(self._depo(plan), gorev_id)
+            _bulut_agac_commit(subprocess.run, agac, gorev_id, makbuz["deneme"], kaydet=True)
+        _ekle(self.kok / "uzlastirmalar.jsonl", {
+            "t": datetime.now(timezone.utc).isoformat(), "gorev": gorev_id,
+            "deneme": makbuz["deneme"], "bulut_gorev_id": makbuz["bulut_gorev_id"],
+            "sonuc": sonuc, "makbuz": str(makbuzlar[-1])})
+        if sonuc == "uygulanmadi":
+            return self.ac(gorev_id, 1, "Bulut sonucu uzlaştırıldı: değişiklik uygulanmadı")
+        # Kullanıcının cloud diff/apply ile mevcut görev ağacına getirdiği değişiklik
+        # G-241 devralma kaynağıdır; yeni bulut gönderimi yerine bağımsız kapı çalışır.
+        return self.kapi(gorev_id)
+
     def kapi(self, gorev_id):
         try:
             return self._yeniden_kapi(gorev_id)
@@ -1010,12 +1107,13 @@ class Yurutme:
         eski_makbuz = json.loads(onceki[-1].read_text(encoding="utf-8")) if onceki else {}
         numara = len(self._kapi_makbuzlari(gorev)) + 1
         makbuz = self.kok / "makbuzlar" / f"{gorev_id}-kapi-{numara}.json"
-        _json_yaz(makbuz, {"gorev": gorev_id, "deneme": eski_makbuz.get("deneme"),
+        veri = {"gorev": gorev_id, "deneme": eski_makbuz.get("deneme"),
                            "yeniden_kapi": True, "thread_id": eski_makbuz.get("thread_id"),
                            "goal": eski_makbuz.get("goal"), "isci_ozeti": eski_makbuz.get("isci_ozeti"),
                            "temizlenen_artiklar": eski_makbuz.get("temizlenen_artiklar", []),
                            "degisen_dosyalar": degisen, "kapsam_ihlalleri": ihlaller,
                            "komut_sonuclari": komutlar, "hatalar": hatalar,
+                           "kapi_tekrarlari": self._son_kapi_tekrarlari,
                            "kehanet": self._son_kehanet_sonucu["kehanet"],
                            "kehanet_sonucu": self._son_kehanet_sonucu,
                            "cikti_sozlesmesi": _cikti_sozlesmesi(self.calisma, gorev_id),
@@ -1026,10 +1124,24 @@ class Yurutme:
                            "okuma_denetimi": eski_makbuz.get("okuma_denetimi"),
                            "akis_gunlugu": eski_makbuz.get("akis_gunlugu"),
                            "insan_incelemeleri": inceleme,
-                           "karar": "ret" if hatalar else "inceleme_bekliyor" if inceleme else "kapi_gecti"})
+                           "karar": "ret" if hatalar else "inceleme_bekliyor" if inceleme else "kapi_gecti"}
+        veri["kabul_ozeti"] = kabul_ozeti(gorev, veri)
+        _json_yaz(makbuz, veri)
         self._olay("yeniden_kapi", gorev_id, makbuz=str(makbuz), hatalar=hatalar)
         self._iz("dogrulama", "yeniden kapi", sonuc="ret" if hatalar else "ok", kanit=[str(makbuz)], gorev=gorev_id)
         if hatalar:
+            teshis_yolu = self.kok / "teshis.jsonl"
+            gorev_teshisleri = [x for x in (
+                [json.loads(s) for s in teshis_yolu.read_text(encoding="utf-8").splitlines() if s.strip()]
+                if teshis_yolu.exists() else []) if x.get("gorev") == gorev_id]
+            son_teshis = gorev_teshisleri[-1] if gorev_teshisleri else {}
+            kehanet_onarimi = (son_teshis.get("sinif") == "dogrulayici_kusuru"
+                               and son_teshis.get("eylem") == "yeniden_denetle"
+                               and any(x.get("kehanet_sha256") != son_teshis.get("kehanet_sha256")
+                                       for x in gorev_teshisleri[:-1]))
+            if any(x.get("kararsiz") for x in komutlar) or kehanet_onarimi:
+                from orvant_op.yurutme.s4_kancasi import basarisizligi_isle
+                return basarisizligi_isle(self, plan, gorev, makbuz)
             return {"gorev": gorev_id, "durum": gorev["durum"], "makbuz": str(makbuz), "hatalar": hatalar}
         if inceleme:
             gorev["durum"] = "inceleme_bekliyor"
@@ -1210,7 +1322,9 @@ class Yurutme:
             raise RuntimeError("merge için depo main dalında olmalı")
         if _git(depo, "status", "--porcelain", "--untracked-files=all").stdout.strip():
             raise RuntimeError("merge öncesi main çalışma ağacı temiz değil")
-        _git(agac, "add", "-A")
+        # İnceleme kimliğindeki gerçek dosya modunu committe de koru; aksi
+        # halde test edilen ağaç ile birleştirilen ağaç birbirinden kopar.
+        _git(agac, "-c", "core.filemode=true", "add", "-A")
         # Depoda yapılandırılmış e-posta korunur; komut satırından değiştirilmez.
         kimlik = ("-c", "user.name=Orvant")
         _git(agac, *kimlik, "commit", "--allow-empty", "-m", f"{gorev['id']}: {gorev['baslik']} ({makbuz.name})")
@@ -1227,13 +1341,67 @@ class Yurutme:
             _json_yaz(makbuz, makbuz_veri)
             if hatalar:
                 raise RuntimeError("main ile birleşik ağaçta kapı kaldı: " + "; ".join(hatalar)[:600])
+        makbuz_veri = json.loads(makbuz.read_text(encoding="utf-8"))
+        incelenen_agac = makbuz_veri.get("insan_incelemesi_agaci")
+        if incelenen_agac is not None and _inceleme_agac_kimligi(agac) != incelenen_agac:
+            makbuz_veri["karar"] = "inceleme_bekliyor"
+            makbuz_veri.setdefault("hatalar", []).append(
+                "İnsan incelemesinden sonra görev ağacı değişti; yeniden inceleme gerekli")
+            _json_yaz(makbuz, makbuz_veri)
+            return False
         proje_koprusu.guard(self.calisma, gorev["id"])
+        tested_commit = _git(agac, "rev-parse", "HEAD").stdout.strip()
+        tested_tree = _git(agac, "rev-parse", "HEAD^{tree}").stdout.strip()
+        makbuz_veri = json.loads(makbuz.read_text(encoding="utf-8"))
+        makbuz_veri.update({"tested_commit": tested_commit, "tested_tree": tested_tree,
+                            "merged_commit": None})
+        makbuz_veri["kabul_ozeti"] = kabul_ozeti(gorev, makbuz_veri)
+        _json_yaz(makbuz, makbuz_veri)
+        # Yeniden koşan kapının bıraktığı çıktılar test edilen commit'in parçası değildir;
+        # yalnız kapıdan sonra ortaya çıkan işçi değişikliğini yakalamak için anlık görüntüle.
+        def calisma_agaci():
+            with tempfile.TemporaryDirectory(prefix="orvant-index-") as gecici:
+                env = dict(os.environ, GIT_INDEX_FILE=str(Path(gecici) / "index"))
+                _git(agac, "read-tree", "HEAD", env=env)
+                _git(agac, "-c", "core.filemode=true", "add", "-A", env=env)
+                return _git(agac, "write-tree", env=env).stdout.strip()
+
+        kapi_sonrasi_agac = calisma_agaci()
         self._birlestirme_oncesi(gorev, makbuz)
+        guncel_commit = _git(agac, "rev-parse", "HEAD").stdout.strip()
+        guncel_tree = _git(agac, "rev-parse", "HEAD^{tree}").stdout.strip()
+        if (calisma_agaci() != kapi_sonrasi_agac or guncel_commit != tested_commit or
+                guncel_tree != tested_tree):
+            makbuz_veri = json.loads(makbuz.read_text(encoding="utf-8"))
+            hata = "merge failed: kapı sonrası / birleşme öncesi görev ağacı değişti"
+            makbuz_veri["karar"] = "ret"
+            makbuz_veri.setdefault("hatalar", []).append(hata)
+            makbuz_veri["kabul_ozeti"] = kabul_ozeti(gorev, makbuz_veri)
+            _json_yaz(makbuz, makbuz_veri)
+            raise RuntimeError(hata)
         proje_agaci = (_git(agac, "rev-parse", "HEAD^{tree}").stdout.strip()
                        if proje_koprusu.load(self.calisma) else None)
+        # Birleşme ağacını main ref'ine dokunmadan üret ve ancak test edilen ağaçla
+        # aynıysa gerçek birleşmeyi yayınla.
+        aday = _git(depo, "merge-tree", "--write-tree", "main", tested_commit, check=False)
+        merged_tree = aday.stdout.splitlines()[0].strip() if aday.returncode == 0 else ""
+        if merged_tree != tested_tree:
+            makbuz_veri = json.loads(makbuz.read_text(encoding="utf-8"))
+            makbuz_veri["karar"] = "ret"
+            makbuz_veri.setdefault("hatalar", []).append(
+                "merge failed: tested_tree birleşen commit ağacıyla eşleşmiyor")
+            makbuz_veri["kabul_ozeti"] = kabul_ozeti(gorev, makbuz_veri)
+            _json_yaz(makbuz, makbuz_veri)
+            raise RuntimeError("tested_tree != merged_commit^{tree}")
         _git(depo, "merge", "--no-ff", "-m", f"Orvant {gorev['id']} ({makbuz.name})",
              f"orvant/{gorev['id']}")
-        if proje_agaci and _git(depo, "rev-parse", "HEAD^{tree}").stdout.strip() != proje_agaci:
+        merged_commit = _git(depo, "rev-parse", "HEAD").stdout.strip()
+        merged_tree = _git(depo, "rev-parse", "HEAD^{tree}").stdout.strip()
+        makbuz_veri = json.loads(makbuz.read_text(encoding="utf-8"))
+        makbuz_veri["merged_commit"] = merged_commit
+        makbuz_veri["kabul_ozeti"] = kabul_ozeti(gorev, makbuz_veri)
+        _json_yaz(makbuz, makbuz_veri)
+        if proje_agaci and merged_tree != proje_agaci:
             raise RuntimeError("project execution tree changed during merge")
         gorev["durum"] = "kabul"
         self._bagimlilari_ac(plan)
@@ -1241,19 +1409,55 @@ class Yurutme:
         makbuz_veri = json.loads(makbuz.read_text(encoding="utf-8"))
         makbuz_veri["karar"] = "kabul"
         if proje_koprusu.load(self.calisma):
-            makbuz_veri["execution_commit"] = _git(depo, "rev-parse", "HEAD").stdout.strip()
+            makbuz_veri["execution_commit"] = merged_commit
             makbuz_veri["validated_tree"] = proje_agaci
+        makbuz_veri["kabul_ozeti"] = kabul_ozeti(gorev, makbuz_veri)
         _json_yaz(makbuz, makbuz_veri)
         self._olay("kabul", gorev["id"], makbuz=str(makbuz))
         self._iz("birlestirme", gorev["id"], kanit=[str(makbuz)], gorev=gorev["id"])
         _git(depo, "worktree", "remove", "--force", str(agac))
         _git(depo, "branch", "-d", f"orvant/{gorev['id']}")
 
+    def _inceleme_freni(self, plan, *, gorev_id=None, duyur=False):
+        """Yalnız yeni hazır işleri beklet; incelemeden dönen düzeltmeler serbest."""
+        sinir = ayarlar.inceleme_bekleyen_siniri(self.calisma)
+        bekleyen = [g["id"] for g in plan["gorevler"] if g["durum"] == "inceleme_bekliyor"]
+        if not sinir or len(bekleyen) < sinir:
+            self._inceleme_duyurusu = None
+            return {}
+        yol = self.kok / "incelemeler.jsonl"
+        incelenen = ({json.loads(s)["gorev"] for s in yol.read_text(encoding="utf-8").splitlines() if s.strip()}
+                     if yol.exists() else set())
+        bekletilen = {}
+        for g in plan["gorevler"]:
+            if g["durum"] != "hazir" or g["id"] in incelenen:
+                continue
+            # İnceleme bekleyen bir denemenin yeniden açılması da yeni iş değildir.
+            if any(json.loads(p.read_text(encoding="utf-8")).get("karar") == "inceleme_bekliyor"
+                   for p in self._makbuzlar(g) + self._kapi_makbuzlari(g)):
+                continue
+            bekletilen[g["id"]] = "inceleme sınırı"
+        if duyur and any(gorev_id is None or g == gorev_id for g in bekletilen):
+            if not getattr(self, "_inceleme_duyurusu", None):
+                self._olay("uretim_durdu_inceleme", None, bekleyen=bekleyen, sinir=sinir,
+                           bekletilen=sorted(bekletilen))
+                print(f"{len(bekleyen)} iş incelemenizi bekliyor: orvant yurut incele "
+                      f"{shlex.quote(str(self.calisma))} {shlex.quote(bekleyen[0])} …", file=sys.stderr)
+                self._inceleme_duyurusu = True
+        return bekletilen
+
     def yurut(self, *, gorev_id=None, en_fazla=1):
         proje_koprusu.guard(self.calisma, gorev_id)
         if en_fazla < 1:
             raise ValueError("--en-fazla pozitif olmalı")
         tamamlanan = []
+        plan = self._plan()
+        checkpointler = [g for g in plan["gorevler"] if g["durum"] == "kota_bekleniyor"
+                         and (gorev_id is None or g["id"] == gorev_id)]
+        if checkpointler:
+            for g in checkpointler:
+                g["durum"] = "hazir"
+            self._kaydet_plan(plan)
         for _ in range(en_fazla):
             plan = self._plan()
             if gorev_id is not None and kehanet_gecersiz_mi(self.calisma, gorev_id):
@@ -1268,6 +1472,7 @@ class Yurutme:
                     self.serbest(bekleyen["id"])
             plan = self._plan()
             bekletilenler = self._bekletilenler(plan)
+            bekletilenler.update(self._inceleme_freni(plan, gorev_id=gorev_id, duyur=True))
             if gorev_id in bekletilenler:
                 g = next(g for g in plan["gorevler"] if g["id"] == gorev_id)
                 tamamlanan.append({"gorev": gorev_id, "durum": g["durum"],
@@ -1288,11 +1493,35 @@ class Yurutme:
                 continue
             try:
                 tamamlanan.append(self._gorev_yurut(plan, aday, izin_yollari=yollar))
+                if tamamlanan[-1].get("durum") == "kota_bekleniyor":
+                    break
             except Exception as exc:
                 if aday["durum"] != "kabul":
                     self._istisna_engelle(plan, aday, exc)
                 raise
         return tamamlanan
+
+    def _kota_checkpoint(self, plan, gorev, deneme, hata):
+        """Kota dolumunu makbuz/deneme üretmeden kalıcı bir bekleme noktası yap."""
+        from orvant_op.teshis import teshis_et
+
+        karar = teshis_et({"makbuz": {"goal": {"status": "usage_limited"},
+                                      "hatalar": [hata or "usage limit"]},
+                           "gorev": gorev, "plan_ozeti": {"surum": plan.get("surum")},
+                           "isci_kostu": True})
+        kayit = {"t": datetime.now(timezone.utc).isoformat(), "gorev": gorev["id"],
+                 "makbuz": None, "deneme": deneme, "checkpoint": True,
+                 "toplam_tokens": 0, **karar}
+        self.kok.mkdir(parents=True, exist_ok=True)
+        _ekle(self.kok / "teshis.jsonl", kayit)
+        gorev["durum"] = "kota_bekleniyor"
+        self._kaydet_plan(plan)
+        self._olay("kota_checkpoint", gorev["id"], deneme=deneme, teshis=kayit)
+        self._iz("ariza_teshisi", karar["gerekce"], sonuc="ret",
+                 ham={"gorev": gorev["id"], "sinif": "kota_doldu",
+                      "eylem": "kota_bekle", "imza": karar["imza"]}, gorev=gorev["id"])
+        return {"gorev": gorev["id"], "durum": "kota_bekleniyor",
+                "deneme": deneme, "teshis": karar}
 
     def _gorev_yurut(self, plan, gorev, *, izin_yollari=()):
         self._son_kat_golge = None
@@ -1412,18 +1641,48 @@ class Yurutme:
             if proje_ayarlari:
                 isci_zaman_asimi = proje_ayarlari["worker_timeout"]
             proje_koprusu.reserve_call(self.calisma, gorev["id"])
-            kosu = hedef_calistir(istem, calisma=agac,
-                                  effort=proje_ayarlari["effort"] if proje_ayarlari else "high",
-                                  iz_yolu=self.iz_yolu, yurutucu=izli_yurutucu, proje=self.calisma.name, gorev=gorev["id"],
-                                  zaman_asimi=isci_zaman_asimi,
-                                  ag=ag, ek_dizinler=[self._onbellek(plan),
-                                                     *self._izinli_dizinleri_hazirla(izin_yollari),
-                                                     *proje_koprusu.scratch_directory(self.calisma)])
+            try:
+                kosu = hedef_calistir(istem, calisma=agac,
+                                      effort=proje_ayarlari["effort"] if proje_ayarlari else "high",
+                                      iz_yolu=self.iz_yolu, yurutucu=izli_yurutucu,
+                                      proje=self.calisma.name, gorev=gorev["id"],
+                                      deneme=deneme,
+                                      zaman_asimi=isci_zaman_asimi,
+                                      ag=ag, ek_dizinler=[self._onbellek(plan),
+                                                         *self._izinli_dizinleri_hazirla(izin_yollari),
+                                                         *proje_koprusu.scratch_directory(self.calisma)])
+            except YurutucuKotaHatasi as exc:
+                kosu = {"thread_id": None, "rc": 1, "hata": str(exc), "son_mesaj": None,
+                        "kullanim": {"girdi_token": 0, "onbellek_token": 0, "cikti_token": 0},
+                        "zaman_asimi": False, "kota_doldu": True}
+            except YurutucuOnKontrolHatasi as exc:
+                # Bulut işi hiç başlamadı: normal makbuz yazmak deneme hakkını yakardı.
+                gorev["durum"] = "engelli"
+                self._kaydet_plan(plan)
+                self._engel(gorev, str(exc))
+                return {"gorev": gorev["id"], "durum": "engelli", "gerekce": str(exc)}
+            except YurutucuHatasi as exc:
+                kosu = {"thread_id": None, "rc": 1, "hata": str(exc), "son_mesaj": None,
+                        "kullanim": {"girdi_token": 0, "onbellek_token": 0, "cikti_token": 0},
+                        "zaman_asimi": isinstance(exc, YurutucuZamanAsimi)}
+            if kosu.get("kota_doldu"):
+                return self._kota_checkpoint(plan, gorev, deneme, kosu.get("hata"))
             try:
                 goal = goal_oku(kosu["thread_id"], self.goals_db)
             except RuntimeError as exc:
                 goal = {"status": "okuma_hatasi", "tokens_used": None}
                 kosu["hata"] = str(exc)
+            if kosu.get("bulut_gorev_sayisi"):
+                if kosu.get("goal_status"):
+                    # Codex Cloud goals DB kullanmaz. READY sonucu uygulanmışsa
+                    # yaşam döngüsü yerel goal kaydı olmasa da belirgindir.
+                    goal["status"] = kosu["goal_status"]
+                if not goal.get("tokens_used"):
+                    # Cloud token döndürmüyor. Bütçe yolunu delmemesi için mevcut
+                    # rezervasyonu makbuzdaki yerleşik tüketim alanına uzlaştır.
+                    goal["tokens_used"] = self._deneme["token"]
+                goal["bulut_gorev_sayisi"] = kosu["bulut_gorev_sayisi"]
+                goal["bulut_sure_sn"] = kosu.get("bulut_sure_sn", 0)
             self._iz("baslatma_izleme", f"goal {goal['status']}", ham={"goal": goal, "thread_id": kosu["thread_id"]}, gorev=gorev["id"])
             okuma = okuma_denetimi(agac, girdiler, akis_yolu.read_text(encoding="utf-8") if akis_yolu.exists() else "")
             if okuma["durum"] == "uyari":
@@ -1442,6 +1701,11 @@ class Yurutme:
             inceleme = [k["id"] for k in gorev["kabul"] if k["tur"] == "insan_incelemesi"]
             karar = "ret" if hatalar else "inceleme_bekliyor" if inceleme else "kapi_gecti"
             makbuz = self._makbuz(gorev, deneme, thread_id=kosu["thread_id"],
+                                  outcome_unknown=bool(kosu.get("outcome_unknown")),
+                                  bulut_gorev_id=(kosu.get("thread_id")
+                                                   if kosu.get("outcome_unknown") else None),
+                                  bulut_gorev_url=kosu.get("bulut_gorev_url"),
+                                  uzlastirma_komutu=kosu.get("uzlastirma_komutu"),
                                   goal=goal, isci_ozeti=kosu["son_mesaj"],
                                   okunabilir_girdiler=girdiler, okuma_denetimi=okuma,
                                   yetenek_manifesti=self._yetenek_manifesti(plan, gorev, girdiler),
@@ -1449,6 +1713,7 @@ class Yurutme:
                                   isci_zaman_asimi=bool(kosu.get("zaman_asimi")),
                                   degisen_dosyalar=degisen, kapsam_ihlalleri=ihlaller,
                                   komut_sonuclari=komutlar, hatalar=hatalar, karar=karar,
+                                  kapi_tekrarlari=self._son_kapi_tekrarlari,
                                   kehanet=self._son_kehanet_sonucu["kehanet"],
                                   kehanet_sonucu=self._son_kehanet_sonucu,
                                   insan_incelemeleri=inceleme)
@@ -1484,9 +1749,11 @@ class Yurutme:
                 return {"gorev": gorev["id"], "durum": gorev["durum"], "makbuz": str(makbuz)}
         raise RuntimeError("deneme bütçesi geçersiz")
 
-    def incele(self, gorev_id, kabul_id, sonuc, not_metni, *, dakika=None):
+    def incele(self, gorev_id, kabul_id, sonuc, not_metni, *, dakika=None,
+               inceleyen="bilinmiyor"):
         try:
-            return self._incele(gorev_id, kabul_id, sonuc, not_metni, dakika=dakika)
+            return self._incele(gorev_id, kabul_id, sonuc, not_metni, dakika=dakika,
+                                inceleyen=inceleyen)
         except Exception as exc:
             plan = self._plan()
             gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
@@ -1494,11 +1761,14 @@ class Yurutme:
                 self._istisna_engelle(plan, gorev, exc)
             raise
 
-    def _incele(self, gorev_id, kabul_id, sonuc, not_metni, *, dakika=None):
+    def _incele(self, gorev_id, kabul_id, sonuc, not_metni, *, dakika=None,
+                inceleyen="bilinmiyor"):
         if sonuc not in ("gecti", "kaldi") or not not_metni.strip():
             raise ValueError("inceleme sonucu ve not gerekli")
         if dakika is not None and dakika < 0:
             raise ValueError("dakika negatif olamaz")
+        if inceleyen not in ("kullanici", "duzenlemetor", "bilinmiyor"):
+            raise ValueError("inceleyen kullanici, duzenlemetor veya bilinmiyor olmalı")
         plan = self._plan()
         gorev = next((g for g in plan["gorevler"] if g["id"] == gorev_id), None)
         if not gorev or gorev["durum"] != "inceleme_bekliyor":
@@ -1506,24 +1776,36 @@ class Yurutme:
         ids = {k["id"] for k in gorev["kabul"] if k["tur"] == "insan_incelemesi"}
         if kabul_id not in ids:
             raise ValueError("insan incelemesi kimliği bulunamadı")
+        agac = self._agac(self._depo(plan), gorev_id)
+        tested_tree = _inceleme_agac_kimligi(agac)
+        makbuzlar = self._makbuzlar(gorev)
+        deneme = json.loads(makbuzlar[-1].read_text(encoding="utf-8"))["deneme"]
         kayitlar = self.kok / "incelemeler.jsonl"
         _ekle(kayitlar, {"gorev": gorev_id, "kabul_id": kabul_id, "sonuc": sonuc,
-                          "not": not_metni, "dakika": dakika,
+                          "not": not_metni, "dakika": dakika, "inceleyen": inceleyen,
+                          "tested_tree": tested_tree, "deneme": deneme,
                           "t": datetime.now(timezone.utc).isoformat()})
-        self._olay("insan_incelemesi", gorev_id, kabul_id=kabul_id, sonuc=sonuc, not_metni=not_metni)
+        self._olay("insan_incelemesi", gorev_id, aktor=inceleyen, kabul_id=kabul_id,
+                   sonuc=sonuc, not_metni=not_metni, insan_dakika=dakika,
+                   tested_tree=tested_tree, deneme=deneme)
+        iz_aktoru = "kullanici" if inceleyen == "kullanici" else "orvant"
         self._iz("dogrulama", f"insan incelemesi {sonuc}",
-                 aktor="kullanici", sonuc="ok" if sonuc == "gecti" else "ret",
-                 maliyet={"insan_dakika": dakika}, gorev=gorev_id)
+                 aktor=iz_aktoru, sonuc="ok" if sonuc == "gecti" else "ret",
+                 maliyet={"insan_dakika": dakika},
+                 ham={"olay_turu": "insan_incelemesi", "inceleyen": inceleyen,
+                      "tested_tree": tested_tree, "deneme": deneme},
+                 gorev=gorev_id)
         if sonuc == "kaldi":
             self._engel(gorev, f"İnsan incelemesi kaldı: {kabul_id}: {not_metni}")
             gorev["durum"] = "hazir" if len(self._makbuzlar(gorev)) < gorev["butce"]["deneme"] else "engelli"
             self._kaydet_plan(plan)
             return {"gorev": gorev_id, "durum": gorev["durum"]}
         entries = [json.loads(s) for s in kayitlar.read_text(encoding="utf-8").splitlines()]
-        son = {e["kabul_id"]: e["sonuc"] for e in entries if e["gorev"] == gorev_id}
+        son = {e["kabul_id"]: e["sonuc"] for e in entries
+               if e["gorev"] == gorev_id and e.get("tested_tree") == tested_tree
+               and e.get("deneme") == deneme}
         if any(son.get(id) != "gecti" for id in ids):
             return {"gorev": gorev_id, "durum": "inceleme_bekliyor"}
-        agac = self._agac(self._depo(plan), gorev_id)
         degisen, ihlaller, komutlar, hatalar = self._kapi(agac, gorev)
         kapi_makbuzlari = self._kapi_makbuzlari(gorev)
         makbuz = kapi_makbuzlari[-1] if kapi_makbuzlari and json.loads(
@@ -1541,13 +1823,55 @@ class Yurutme:
             gorev["durum"] = "hazir" if len(self._makbuzlar(gorev)) < gorev["butce"]["deneme"] else "engelli"
             self._kaydet_plan(plan)
             return {"gorev": gorev_id, "durum": gorev["durum"], "hatalar": hatalar}
-        self._kabul(plan, gorev, agac, makbuz)
+        if _inceleme_agac_kimligi(agac) != tested_tree:
+            makbuz_veri["karar"] = "inceleme_bekliyor"
+            makbuz_veri.setdefault("hatalar", []).append(
+                "İnsan incelemesinden sonra kapı görev ağacını değiştirdi; yeniden inceleme gerekli")
+            _json_yaz(makbuz, makbuz_veri)
+            return {"gorev": gorev_id, "durum": "inceleme_bekliyor", "makbuz": str(makbuz)}
+        makbuz_veri["insan_incelemesi_agaci"] = tested_tree
+        _json_yaz(makbuz, makbuz_veri)
+        if self._kabul(plan, gorev, agac, makbuz) is False:
+            gorev["durum"] = "inceleme_bekliyor"
+            self._kaydet_plan(plan)
+            return {"gorev": gorev_id, "durum": "inceleme_bekliyor", "makbuz": str(makbuz)}
         return {"gorev": gorev_id, "durum": "kabul", "makbuz": str(makbuz)}
 
     def durum(self):
         plan = self._plan()
         engeller = self.kok / "engeller.jsonl"
-        return {"gorevler": [{"id": g["id"], "durum": g["durum"]} for g in plan["gorevler"]],
+        gorevler = []
+        for g in plan["gorevler"]:
+            satir = {"id": g["id"], "durum": g["durum"]}
+            if g["durum"] == "inceleme_bekliyor":
+                makbuzlar = self._makbuzlar(g)
+                try:
+                    makbuz = json.loads(makbuzlar[-1].read_text(encoding="utf-8")) if makbuzlar else {}
+                    if not isinstance(makbuz, dict):
+                        raise ValueError("Makbuz sözlük olmalı")
+                    kapi_yollari = []
+                    for yol in self._kapi_makbuzlari(g):
+                        try:
+                            sira = int(yol.stem.rsplit("-", 1)[1])
+                        except ValueError:
+                            continue
+                        kapi_yollari.append((sira, yol))
+                    # Yalnız mevcut denemenin en son yeniden kapı kanıtını göster.
+                    for _, yol in sorted(kapi_yollari, key=lambda p: p[0], reverse=True):
+                        kapi = json.loads(yol.read_text(encoding="utf-8"))
+                        if not isinstance(kapi, dict):
+                            raise ValueError("Kapı makbuzu sözlük olmalı")
+                        if kapi.get("deneme") == makbuz.get("deneme"):
+                            if kapi.get("karar") == "inceleme_bekliyor":
+                                makbuz = kapi
+                            break
+                except (OSError, ValueError):
+                    makbuz = {}
+                    satir["makbuz_okunamadi"] = True
+                satir["kabul_ozeti"] = makbuz.get("kabul_ozeti") or {
+                    "ihtiyac": None, "kabul_kanit": None, "degisen": None, "insan_karari": None}
+            gorevler.append(satir)
+        return {"gorevler": gorevler,
                 "sorular": [{"gorev": g["id"], "tur": "yetki", "istek": y}
                             for g in plan["gorevler"] if g["durum"] == "yetki_bekliyor"
                             for y in plan["yetki_istekleri"] if y["id"] in g["yetki_istek_ids"] and y["durum"] == "acik"]

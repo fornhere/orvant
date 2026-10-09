@@ -203,12 +203,14 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
             self._jeton_gecersiz_kil({gorev_id}, "Görev yeniden açıldı: " + gerekce)
             return sonuc
 
-    def incele(self, gorev_id, kabul_id, sonuc, not_metni, *, dakika=None):
+    def incele(self, gorev_id, kabul_id, sonuc, not_metni, *, dakika=None,
+               inceleyen="bilinmiyor"):
         with self._kilit():
             self._karantina_dogrula(gorev_id)
-            return super().incele(gorev_id, kabul_id, sonuc, not_metni, dakika=dakika)
+            return super().incele(gorev_id, kabul_id, sonuc, not_metni, dakika=dakika,
+                                  inceleyen=inceleyen)
 
-    def _olay(self, tur, gorev, *, is_turu=None, **veri):
+    def _olay(self, tur, gorev, *, is_turu=None, aktor="orvant", **veri):
         deneme = getattr(self, "_deneme", None)
         if deneme and gorev == deneme["gorev"]:
             veri.setdefault("jeton", deneme["jeton"])
@@ -223,7 +225,7 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                 self._denemeler[gorev] = veri["deneme"]
             if gorev in self._denemeler:
                 veri.setdefault("gorev_denemesi", self._denemeler[gorev])
-        return super()._olay(tur, gorev, is_turu=is_turu, **veri)
+        return super()._olay(tur, gorev, is_turu=is_turu, aktor=aktor, **veri)
 
     def _makbuz(self, gorev, deneme, **alanlar):
         alanlar.update(yurutme_grubu=self._grup, gorev_denemesi=deneme)
@@ -245,8 +247,13 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
             en_fazla = 1 if paralel == 1 else paralel
         if en_fazla < 1:
             raise ValueError("--en-fazla pozitif olmalı")
+        # Aynı Yurutme örneğinde bir önceki operatör yoklamasının duyurusunu
+        # koru; fren kalktığında _inceleme_freni bayrağı zaten temizler.
+        if not hasattr(self, "_inceleme_duyurusu"):
+            self._inceleme_duyurusu = None
         if gorev_id is not None:
             plan = self._plan()
+            self._inceleme_freni(plan, gorev_id=gorev_id, duyur=True)
             neden = self._bekletilenler(plan).get(gorev_id)
             if neden:
                 gorev = next(g for g in plan["gorevler"] if g["id"] == gorev_id)
@@ -312,7 +319,10 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                     gelecek = onde.pop() if onde else bitenler.get()
                     gorev, _ = kosan.pop(gelecek)
                     try:
-                        sonuclar.append(gelecek.result())
+                        sonuc = gelecek.result()
+                        sonuclar.append(sonuc)
+                        if sonuc.get("durum") == "kota_bekleniyor":
+                            dur.set()
                     except Exception as exc:
                         hatalar.append(f"{gorev['id']}: {type(exc).__name__}: {exc}")
                         dur.set()
@@ -332,6 +342,7 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
                                     self.serbest(bekleyen["id"])
                             plan = self._plan()
                             bekletilenler = self._bekletilenler(plan)
+                            self._inceleme_freni(plan, gorev_id=gorev_id, duyur=True)
                             if gorev_id in bekletilenler:
                                 g = next(g for g in plan["gorevler"] if g["id"] == gorev_id)
                                 sonuclar.append({"gorev": gorev_id, "durum": g["durum"],
@@ -379,6 +390,7 @@ class Yurutme(DenemeMixin, KarantinaMixin, korumali.Yurutme):
 
     def _bekletilenler(self, plan):
         bekletilenler = super()._bekletilenler(plan)
+        bekletilenler.update(self._inceleme_freni(plan))
         kabuller = {g["id"] for g in plan["gorevler"] if g["durum"] == "kabul"}
         for kimlik, isaret in self.denetim_isaretleri().items():
             if kimlik in kabuller and isaret.get("durum") in ("bekliyor", "geri_alma_adayi"):

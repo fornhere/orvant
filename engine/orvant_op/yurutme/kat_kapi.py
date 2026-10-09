@@ -14,7 +14,7 @@ YORUMLAYICI_KIMLIGI = "orvant-kat"
 YORUMLAYICI_ANA_SURUMU = 1
 
 
-def oturum_dosyalari_dogrula(oturum_dizini, isci_yazilabilir_kokler):
+def oturum_dosyalari_dogrula(oturum_dizini, isci_yazilabilir_kokler, *, onay_kaynagi="s1"):
     """Güven dayanaklarını tek açılıştan, denetlenen aynı fd üzerinden okur."""
     if (not isinstance(isci_yazilabilir_kokler, (list, tuple))
             or not isci_yazilabilir_kokler):
@@ -29,10 +29,13 @@ def oturum_dosyalari_dogrula(oturum_dizini, isci_yazilabilir_kokler):
         kokler.append(yol.resolve(strict=True))
 
     oturum_ham = Path(oturum_dizini)
-    okunacaklar = (
-        oturum_ham / "karsilama" / "olaylar.jsonl",
-        oturum_ham / "karsilama" / "sozlesme.json",
-    )
+    if onay_kaynagi == "s1":
+        okunacaklar = (oturum_ham / "karsilama/olaylar.jsonl",
+                      oturum_ham / "karsilama/sozlesme.json")
+    elif onay_kaynagi == "proje":
+        okunacaklar = (oturum_ham / "proje.json", oturum_ham / "proje-durum.json")
+    else:
+        raise ValueError("bilinmeyen onay kaynağı")
     icerikler = {}
     for ham in okunacaklar:
         # resolve() bağları görünmez kılmadan önce sözcüksel zincirin tamamını denetle.
@@ -81,6 +84,92 @@ def _onay_oku(ham):
             or sha == "sha256:" + "0" * 64):
         raise ValueError("kullanıcı onayı geçersiz")
     return veri
+
+
+def onay_oku(oturum_dizini, isci_yazilabilir_kokler, *, onay_kaynagi="s1"):
+    """Onayı yalnız korumalı oturum dosyalarından alır; nesne kabul etmez."""
+    oturum, icerikler = oturum_dosyalari_dogrula(
+        oturum_dizini, isci_yazilabilir_kokler, onay_kaynagi=onay_kaynagi)
+    if onay_kaynagi == "s1":
+        from orvant_op.karsilama.sozlesme import sozlesme_hash
+        onay = _onay_oku(icerikler["olaylar.jsonl"])
+        sozlesme = json.loads(icerikler["sozlesme.json"])
+        if (sozlesme_hash(sozlesme) != onay["sozlesme_sha256"]
+                or sozlesme.get("revizyon") != onay["sozlesme_revizyon"]):
+            raise ValueError("onaylı sözleşme hash/revizyon uyuşmazlığı")
+        return onay, sozlesme
+    from orvant_op.proje import _digest
+    bag = json.loads(icerikler["proje.json"])
+    durum = json.loads(icerikler["proje-durum.json"])
+    sozlesme = bag["contract"]
+    digest = bag.get("digest")
+    if (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or digest == "0" * 64 or _digest(sozlesme) != digest
+            or durum.get("authorized") is not True
+            or durum.get("approval_digest") != digest
+            or Path(sozlesme["session"]).resolve(strict=True) != oturum):
+        raise ValueError("proje onay digest uyuşmazlığı veya onay yok")
+    revizyon = sozlesme["plan"]["sozlesme_revizyon"]
+    if type(revizyon) is not int:
+        raise ValueError("proje sözleşme revizyonu geçersiz")
+    return {"sozlesme_sha256": "sha256:" + digest,
+            "sozlesme_revizyon": revizyon}, sozlesme
+
+
+def _skill_modulu(ad):
+    """Depo ve yayın engine yerleşiminde motorun kendi skill kopyasını yükler."""
+    import importlib.util
+    depo = Path(__file__).resolve().parents[2]
+    yayin = depo.parent if depo.name == "engine" else depo / "araclar/yayin/sablon"
+    yol = yayin / "skills/orvant/scripts" / (ad + ".py")
+    spec = importlib.util.spec_from_file_location("orvant_kat_" + ad, yol)
+    modul = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modul)
+    return modul
+
+
+def _proje_kat(oturum_dizini, isci_yazilabilir_kokler, gorev):
+    """Onay kapsamındaki ontology kurallarını yayın köprüsüyle derler."""
+    kat_bridge = _skill_modulu("kat_bridge")
+    onay, sozlesme = onay_oku(oturum_dizini, isci_yazilabilir_kokler,
+                             onay_kaynagi="proje")
+    kayit = sozlesme["tasks"][gorev]
+    kurallar = kayit["selection"]["definition"].get("acceptance_rules", [])
+    if not kurallar:
+        return None, {}
+    # Tam ontology kesiti sözleşme digest'ine bağlıdır. İşçinin verdiği
+    # gözlem veya aday ağacındaki .project dosyası otorite olamaz.
+    state = kayit["kat_state"]
+    _skill_modulu("acceptance").validate_contract({"acceptance_rules": kurallar}, state)
+    kat, gozlemler = kat_bridge.kurallardan_kat(state, kurallar, gorev=gorev)
+    kat.update(onay)
+    from orvant_op.kabul_kat import kat_hash
+    kat["kat_sha256"] = kat_hash(kat)
+    return kat, gozlemler
+
+
+def proje_kat_derle(*, oturum_dizini, isci_yazilabilir_kokler, gorev):
+    return _proje_kat(oturum_dizini, isci_yazilabilir_kokler, gorev)[0]
+
+
+def _proje_kapi(kat, yalitim_sonucu, oturum_dizini, isci_yazilabilir_kokler,
+                beklenen_kat_sha256, beklenen_kat_surumu):
+    kat_bridge = _skill_modulu("kat_bridge")
+    from orvant_op.kabul_kat import kat_hash
+    guvenli, gozlemler = _proje_kat(oturum_dizini, isci_yazilabilir_kokler, kat["gorev"])
+    if (guvenli != kat or kat_hash(kat) != beklenen_kat_sha256
+            or type(beklenen_kat_surumu) is not int or kat["kat_surumu"] != beklenen_kat_surumu):
+        raise ValueError("proje KAT dayanak/hash/sürüm uyuşmazlığı")
+    # Köprü biçimi kendi doğrulayıcısından geçer; onay üstverisi ayrı bağlıdır.
+    kopru = {k: v for k, v in kat.items() if k not in ("sozlesme_sha256", "sozlesme_revizyon")}
+    kopru["kat_sha256"] = kat_bridge.kat_hash(kopru)
+    sonuclar = kat_bridge.yorumla(kopru, gozlemler)["sonuclar"]
+    hatalar = ["kontrol_basarisiz:" + s["kontrol_id"] for s in sonuclar if not s["gecti"]]
+    if not isinstance(yalitim_sonucu, dict) or yalitim_sonucu.get("gecti") is not True:
+        hatalar.append("yalitim_basarisiz")
+    sonuc = _ret(kat, yalitim_sonucu, hatalar, sonuclar)
+    sonuc.update(gecti=not hatalar, onay_kaynagi="proje")
+    return sonuc
 
 
 def _ret(kat, yalitim_sonucu, hatalar, sonuclar=None):
@@ -166,13 +255,18 @@ def gozlem_topla(kat, cikti_koku, *, azami_cikti_bayt=8 * 1024 * 1024,
 
 def kapi_karari(kat, cikti_koku, yalitim_sonucu, *, oturum_dizini,
                 isci_yazilabilir_kokler, beklenen_kat_sha256, beklenen_kat_surumu, kok=None,
-                azami_cikti_bayt=8 * 1024 * 1024):
+                azami_cikti_bayt=8 * 1024 * 1024, onay_kaynagi="s1"):
     """KAT ve OS yalıtım sonucundan, hiçbir eksiği başarı saymadan karar üretir.
 
     ``yalitim_sonucu`` değiştirilmeden makbuza taşınır. Adaptör yalıtımı
     yeniden yorumlamaz veya gevşetmez; yalnız açık ``gecti is True`` sonucunu
     başarı için zorunlu tutar.
     """
+    if onay_kaynagi == "proje":
+        return _proje_kapi(kat, yalitim_sonucu, oturum_dizini, isci_yazilabilir_kokler,
+                           beklenen_kat_sha256, beklenen_kat_surumu)
+    if onay_kaynagi != "s1":
+        return _ret(kat, yalitim_sonucu, ["bilinmeyen_onay_kaynagi"])
     try:
         dogrula(kat, kok=kok)
     except (KatHatasi, TypeError, KeyError) as exc:

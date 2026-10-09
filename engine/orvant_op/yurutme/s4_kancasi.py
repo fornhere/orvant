@@ -4,6 +4,7 @@ import json
 import hashlib
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from orvant_op.iz import kaydet
 from orvant_op.bagimli_ciktilar import istenen_ciktilar
@@ -24,7 +25,7 @@ def _teshis_yaz(yurutme, kayit):
     yurutme.kok.mkdir(parents=True, exist_ok=True)
     with (yurutme.kok / "teshis.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(kayit, ensure_ascii=False) + "\n")
-    kaydet(yurutme.iz_yolu, yurutme.calisma.name, "ariza_teshisi",
+    kaydet(yurutme.iz_yolu, yurutme.calisma.name, "ariza_teshisi", calisma=yurutme.calisma,
            aktor_tur="orvant", kimlik="teshis", sonuc="ret",
            ozet=kayit["gerekce"], kanit=[p for p in (kayit.get("makbuz"), kayit.get("iade_makbuzu")) if p],
            gorev=kayit["gorev"], ham={k: kayit[k] for k in ("gorev", "sinif", "eylem", "imza")})
@@ -151,11 +152,12 @@ def yeniden_degerlendir(yurutme, gorev_id=None):
 
 def durumlari_hesapla_korunmus(plan, cozulmus_kararlar=()):
     """S3 hesaplamasında kullanıcı girdisi bekleyen görevleri kilitli tutar."""
-    bekleyen = {g["id"] for g in plan["gorevler"] if g["durum"] == "girdi_bekliyor"}
+    bekleyen = {g["id"]: g["durum"] for g in plan["gorevler"]
+                if g["durum"] in ("girdi_bekliyor", "kota_bekleniyor")}
     _durumlari_hesapla(plan, cozulmus_kararlar)
     for gorev in plan["gorevler"]:
         if gorev["id"] in bekleyen:
-            gorev["durum"] = "girdi_bekliyor"
+            gorev["durum"] = bekleyen[gorev["id"]]
     return plan
 
 
@@ -208,6 +210,8 @@ def basarisizligi_isle(yurutme, plan, gorev, makbuz_yolu, *, istisna=None):
               "isci_kostu": True, "orvant_surumu": orvant_surumu(), "envanter": envanter,
               "onceki_teshisler": oncekiler, "toplam_tokens": toplam}
     baglam["yetenek_manifesti"] = makbuz.get("yetenek_manifesti")
+    # Kararsız kapı dizisi makbuzun içindedir; S4'e ayrıca taşımak iz incelemesini kolaylaştırır.
+    baglam["kapi_tekrarlari"] = makbuz.get("kapi_tekrarlari", [])
     if makbuz.get("kapsam_ihlalleri"):
         agac = yurutme._agac(yurutme._depo(plan), gorev["id"])
         baglam["artik_incelemesi"] = artik_incele(agac, gorev, makbuz["kapsam_ihlalleri"])
@@ -237,7 +241,7 @@ def basarisizligi_isle(yurutme, plan, gorev, makbuz_yolu, *, istisna=None):
     yurutme.kok.mkdir(parents=True, exist_ok=True)
     with (yurutme.kok / "teshis.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(kayit, ensure_ascii=False) + "\n")
-    kaydet(yurutme.iz_yolu, yurutme.calisma.name, "ariza_teshisi",
+    kaydet(yurutme.iz_yolu, yurutme.calisma.name, "ariza_teshisi", calisma=yurutme.calisma,
            aktor_tur="orvant", kimlik="teshis", sonuc="ret",
            ozet=karar["gerekce"], kanit=[str(makbuz_yolu)], gorev=gorev["id"],
            ham={"gorev": gorev["id"], "sinif": karar["sinif"],
@@ -282,6 +286,8 @@ def basarisizligi_isle(yurutme, plan, gorev, makbuz_yolu, *, istisna=None):
         gorev["durum"] = "girdi_bekliyor"
     elif eylem == "yetki_bekle":
         gorev["durum"] = "yetki_bekliyor"
+    elif eylem == "uzlastir":
+        gorev["durum"] = "engelli"
     else:
         gorev["durum"] = "engelli"
     neden = (makbuz.get("isci_ozeti") or makbuz.get("hatalar") or [karar["belirti"]])
@@ -294,3 +300,81 @@ def basarisizligi_isle(yurutme, plan, gorev, makbuz_yolu, *, istisna=None):
     return {"gorev": gorev["id"], "durum": gorev["durum"],
             "makbuz": str(makbuz_yolu), "teshis": karar,
             **({"kullanici_sorusu": soru} if soru else {})}
+
+
+def mudahale_bagi(olaylar, mudahale, *, calisma_yolu=None):
+    """Aynı proje/görevin kesin önceki, en son açık teşhisini bulur.
+
+    Kabul kapısı veya birleştirme teşhisi kapatır. Görevsiz olaylara proje
+    düzeyinde tahmin yapılmaz; aynı zaman damgası da nedensellik kanıtı değildir.
+    """
+    from orvant_op.teshis.karar import SINIFLAR
+
+    gorev = mudahale.get("ham", {}).get("gorev")
+    if not isinstance(gorev, str) or not gorev.strip():
+        return {}
+    zaman = lambda e: datetime.fromisoformat(e["t"].replace("Z", "+00:00"))
+    calisma = mudahale.get("ham", {}).get("calisma")
+
+    def ayni_oturum(e):
+        aday = e.get("ham", {}).get("calisma")
+        # Yeni kayıtlarda çalışma kökü süreçler arası kalıcı kimliktir. Bir
+        # tarafta bulunup diğerinde bulunmuyorsa ortak ORVANT_IZ için tahmin
+        # yapma. Eski kayıtlarda kesin proje kimliğiyle geriye uyumlu kal.
+        if calisma is not None or aday is not None:
+            if not isinstance(calisma, str) or not isinstance(aday, str):
+                return False
+            if calisma == aday:
+                return e.get("proje") == mudahale.get("proje")
+            # Eski mutlak kayıt yalnız çalışan oturumun bilinen gerçek köküyle
+            # tam eşitse yeni kalıcı kimliğe bağlanabilir. Dizin adından tahmin
+            # etmek ayrı makinelerdeki/üst dizinlerdeki oturumları karıştırır.
+            eski_calisma = Path(calisma).is_absolute()
+            eski_aday = Path(aday).is_absolute()
+            if eski_calisma == eski_aday:
+                return False
+            eski, yeni = (calisma, aday) if eski_calisma else (aday, calisma)
+            if calisma_yolu is None or e.get("proje") != mudahale.get("proje"):
+                return False
+            from orvant_op.iz import calisma_kimligi
+            return (Path(eski).resolve() == Path(calisma_yolu).resolve()
+                    and yeni == calisma_kimligi(calisma_yolu, mudahale.get("proje")))
+        return e.get("proje") == mudahale.get("proje")
+
+    onceki = [e for e in olaylar
+              if ayni_oturum(e)
+              and e.get("ham", {}).get("gorev") == gorev
+              and not e.get("miras") and not e.get("benzetim")
+              and e.get("ham", {}).get("iptal") is not True
+              and zaman(e) < zaman(mudahale)]
+    ilgili = [e for e in onceki
+              if (e["is_turu"] == "ariza_teshisi" and e["ham"].get("sinif") in SINIFLAR)
+              or (e["is_turu"] in {"kapi_karari", "birlestirme"} and e["sonuc"] == "ok")]
+    if not ilgili:
+        return {}
+    son_zaman = max(zaman(e) for e in ilgili)
+    sonlar = {e["id"]: e for e in ilgili if zaman(e) == son_zaman}
+    # Aynı anda kapanış/teşhis veya birden çok teşhis varsa sıra kanıtı yoktur.
+    if len(sonlar) != 1:
+        return {}
+    son = next(iter(sonlar.values()))
+    if son["is_turu"] != "ariza_teshisi":
+        return {}
+    return {"teshis_ref": son["id"], "sinif": son["ham"]["sinif"]}
+
+
+
+def mudahale_bagini_ekle(iz_yolu, item, *, calisma_yolu=None):
+    """Ortak yazıcının kullanacağı dar kanca; şema ve eski kayıtlar değişmez."""
+    from pathlib import Path
+    from orvant_gelisim.kayit import oku
+
+    if not item.get("mudahale") or item.get("benzetim") or not item["ham"].get("gorev"):
+        return item
+    yol = Path(iz_yolu)
+    olaylar = oku(yol) if yol.exists() else []
+    # Çağıran tahmini/eskimiş bir bağı aktarmışsa onun yerine doğrulanmış bağ gelir.
+    item["ham"].pop("teshis_ref", None)
+    item["ham"].pop("sinif", None)
+    item["ham"].update(mudahale_bagi(olaylar, item, calisma_yolu=calisma_yolu))
+    return item
