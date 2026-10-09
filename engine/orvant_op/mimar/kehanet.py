@@ -26,6 +26,9 @@ REFERANS_SEMA = Path(__file__).with_name("referans_sema.json")
 # Üretilen kehanetin çalışma zamanı audit-hook'u da bu listeyi kullanır.
 IZINLI_ARACLAR = ("ffprobe", "ffmpeg", "git", "sha256sum", "file")
 YASAK_CAGRILAR = ("eval", "exec", "compile", "__import__", "setattr", "delattr")
+CANLI_DEPO_KORUMA_HATASI = (
+    "kehanet canlı depoyu okuyamaz; depo girdisi kapı ağacında göreli yolla okunur"
+)
 REFERANS_TALIMAT = (
     "Rolün kehanet_yaz; bağımsız pozitif kontrol için referans çıktı üretiyorsun. "
     "Görev, kabul ölçütleri, onaylı kabul değişiklikleri, çözülmüş kararlar ve çıktı "
@@ -183,8 +186,59 @@ def karar_yollari(calisma, karar):
 
 
 def okunabilir_girdiler(calisma):
-    return list(dict.fromkeys(yol for karar in _kararlar(calisma)
-                             for yol in karar_yollari(calisma, karar)))
+    """Karar yollarını canlı depo yolunu sızdırmadan türlendir.
+
+    Depodaki izlenen girdiler kapıda çözülebilecek göreli işaretlerdir. Git dışı
+    yollar kapı ağacında varmış gibi gösterilemeyeceğinden listeden çıkarılır.
+    """
+    plan_yolu = Path(calisma) / "plan" / "plan.json"
+    try:
+        plan = json.loads(plan_yolu.read_text(encoding="utf-8"))
+        ham_depo = plan.get("depo", {}).get("yol")
+        depo = Path(ham_depo).expanduser()
+        depo = (depo if depo.is_absolute() else Path(calisma) / depo).resolve()
+    except (OSError, ValueError, TypeError, AttributeError):
+        depo = None
+    sonuc = []
+    for yol in (y for karar in _kararlar(calisma) for y in karar_yollari(calisma, karar)):
+        gercek = Path(yol).resolve()
+        yeni = yol
+        if depo is not None and (gercek == depo or gercek.is_relative_to(depo)):
+            goreli = gercek.relative_to(depo)
+            if not goreli.parts:  # Depo zaten işçinin ve kapının çalışma ağacıdır.
+                continue
+            if goreli.parts[:2] == (".orvant", "onbellek"):
+                yeni = yol  # G-161: paylaşılan git dışı önbellek dış girdi gibi okunur.
+            else:
+                izli = subprocess.run(
+                    ["git", "-C", str(depo), "ls-files", "--error-unmatch", "--", goreli.as_posix()],
+                    capture_output=True, text=True).returncode == 0
+                if not izli and gercek.is_dir():
+                    izli = bool(subprocess.run(
+                        ["git", "-C", str(depo), "ls-files", "--", goreli.as_posix() + "/"],
+                        capture_output=True, text=True).stdout.strip())
+                if not izli:
+                    _izlenmeyen_girdi_uyarisi(calisma, goreli.as_posix())
+                    continue
+                yeni = {"depo_goreli": goreli.as_posix()}
+        if yeni not in sonuc:
+            sonuc.append(yeni)
+    return sonuc
+
+
+def _izlenmeyen_girdi_uyarisi(calisma, goreli):
+    mesaj = "karar metnindeki yol depo içinde ama git-izli değil; kapı ağacında yok"
+    yol = Path(calisma) / "plan" / "olaylar.jsonl"
+    onceki = yol.read_text(encoding="utf-8") if yol.exists() else ""
+    if any(e.get("tur") == "izlenmeyen_depo_girdisi" and e.get("veri", {}).get("yol") == goreli
+           for satir in onceki.splitlines() if satir.strip()
+           for e in [json.loads(satir)]):
+        return
+    yol.parent.mkdir(parents=True, exist_ok=True)
+    olay = {"t": datetime.now(timezone.utc).isoformat(), "tur": "izlenmeyen_depo_girdisi",
+            "aktor": "orvant", "veri": {"yol": goreli, "uyari": mesaj}}
+    with yol.open("a", encoding="utf-8") as dosya:
+        dosya.write(json.dumps(olay, ensure_ascii=False) + "\n")
 
 
 REFERANS_SNAPSHOT_TEK_DOSYA = 128 * 1024
@@ -542,9 +596,38 @@ def depo_girdisi_denetimi(betik, sozlesme, veri, depo):
     """Özgün depo girdisi kapı ağacındaki göreli yoldan okunur; mutlak yol ve çıktı sayma reddedilir.
 
     G-161: git dışı paylaşılan önbellek (``Yurutme._onbellek``) kapı ağacında yoktur, mutlak yolla okunur."""
-    onbellek = str(Path(depo) / ".orvant" / "onbellek") + os.sep
+    depo = Path(depo).resolve()
+    onbellek_yolu = depo / ".orvant" / "onbellek"
+    onbellek = str(onbellek_yolu) + os.sep
     kacis = any(".." in alt.split("/") for alt in re.findall(re.escape(onbellek) + r"([^\s\"'<>;,]*)", betik))
-    if kacis or str(depo) in betik.replace(onbellek, ""):
+    try:
+        agac = ast.parse(betik)
+    except SyntaxError:
+        agac = None  # Sözdizimini olcutler daha ayrıntılı bildirir.
+
+    def sabit_yol(dugum):
+        """Yalnız Path sabiti, ``/`` ve joinpath birleşimlerini güvenle katlar."""
+        if isinstance(dugum, ast.Constant) and isinstance(dugum.value, str):
+            return Path(dugum.value)
+        if (isinstance(dugum, ast.Call) and isinstance(dugum.func, ast.Name)
+                and dugum.func.id == "Path" and len(dugum.args) == 1):
+            return sabit_yol(dugum.args[0])
+        if isinstance(dugum, ast.BinOp) and isinstance(dugum.op, ast.Div):
+            sol, sag = sabit_yol(dugum.left), sabit_yol(dugum.right)
+            return sol / sag if sol is not None and sag is not None else None
+        if (isinstance(dugum, ast.Call) and isinstance(dugum.func, ast.Attribute)
+                and dugum.func.attr == "joinpath"):
+            kok = sabit_yol(dugum.func.value)
+            ekler = [sabit_yol(a) for a in dugum.args]
+            if kok is not None and all(p is not None for p in ekler):
+                return kok.joinpath(*(str(p) for p in ekler))
+        return None
+
+    mutlaklar = {p.resolve() for d in ast.walk(agac) for p in [sabit_yol(d)]
+                 if p is not None and p.is_absolute()} if agac is not None else set()
+    canli_yol = any(p.is_relative_to(depo) and not p.is_relative_to(onbellek_yolu)
+                    for p in mutlaklar)
+    if kacis or canli_yol or str(depo) in betik.replace(onbellek, ""):
         raise ValueError("betik özgün deponun mutlak yolunu kullanıyor; depo_girdileri kapı ağacında "
                          "cwd'ye göre aynı göreli yolla okunur (mutlak yol kapıda canlı depoyu okur)")
     girdiler = {d["yol"] for d in veri.get("depo_girdileri", []) if d.get("yol")}
@@ -573,6 +656,39 @@ def canli_depo(agac):
     ortak = Path(proc.stdout.strip())
     canli = ortak.parent.resolve() if ortak.name == ".git" else None
     return canli if canli is not None and canli != Path(agac).resolve() else None
+
+
+def kehanet_girdileri(agac, girdiler):
+    """Canlı depo girdilerini aynı göreli konumdaki kapı ağacına yönelt.
+
+    Kullanıcının depo dışındaki açık girdileri değişmeden kalır. Böylece kehanet
+    ``ORVANT_GIRDILER`` listesini tarasa bile özgün çalışma kopyasına erişmez.
+    """
+    canli = canli_depo(agac)
+    if canli is None:
+        return list(dict.fromkeys(girdiler))
+    agac = Path(agac).resolve()
+    sonuc = []
+    for girdi in girdiler:
+        yeni = girdi
+        if isinstance(girdi, dict) and set(girdi) == {"depo_goreli"}:
+            yeni = str(agac / girdi["depo_goreli"])
+            if not Path(yeni).exists():
+                raise ValueError(f"depo-göreli girdi kapı ağacında yok: {girdi['depo_goreli']}")
+        if isinstance(girdi, (str, os.PathLike)):
+            try:
+                yol = Path(girdi).expanduser().resolve()
+                onbellek = canli / ".orvant" / "onbellek"
+                if (yol == agac or yol.is_relative_to(agac) or
+                        yol == onbellek or yol.is_relative_to(onbellek)):
+                    pass
+                elif yol == canli or yol.is_relative_to(canli):
+                    raise ValueError("canlı depo mutlak yolu temizlenmemiş girdi listesinde")
+            except (OSError, RuntimeError):
+                pass
+        if yeni not in sonuc:
+            sonuc.append(yeni)
+    return sonuc
 
 
 # G-176: Claude seçili ve codex yokken OS yalıtımı: salt okunur kök, ağ ad alanı ayrı, süreç ad alanı ayrı.
@@ -791,7 +907,11 @@ def calistir_kehanet(yol, agac, girdiler, zaman_asimi=60):
     except ValueError as exc:
         return {"kehanet": str(yol), "gecti": False, "kontroller": [], "hata": str(exc)}
     env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ}
-    env["ORVANT_GIRDILER"] = json.dumps(girdiler, ensure_ascii=False)
+    try:
+        temiz_girdiler = kehanet_girdileri(agac, girdiler)
+    except ValueError as exc:
+        return {"kehanet": str(yol), "gecti": False, "kontroller": [], "hata": str(exc)}
+    env["ORVANT_GIRDILER"] = json.dumps(temiz_girdiler, ensure_ascii=False)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["ORVANT_KEHANET_ARACLARI"] = ",".join(IZINLI_ARACLAR)
     canli = canli_depo(agac)
@@ -841,7 +961,7 @@ def calistir_kehanet(yol, agac, girdiler, zaman_asimi=60):
                  "isci_calistir, isci_izin, isci_hata = isci_yardimcisi(" +
                  "ISCI_AGAC, ISCI_CIKTILAR, ISCI_DOGRULANDI, ISCI_ORTAM)\n")
     koruma = """import os, runpy, shutil, sys, subprocess, pathlib, selectors, time, math, stat, json, socket, tempfile, signal
-""" + _DIS_YALITIM + """
+""" + _DIS_YALITIM + "\nCANLI_DEPO_KORUMA_HATASI = " + repr(CANLI_DEPO_KORUMA_HATASI) + "\n" + """
 CANLI = os.environ.get('ORVANT_KEHANET_CANLI_DEPO')
 AGAC = os.environ.get('ORVANT_KEHANET_AGAC')
 ONBELLEK = os.path.join(CANLI, '.orvant', 'onbellek') if CANLI else None
@@ -960,7 +1080,7 @@ def denetle(olay, args):
     if olay == 'os.putenv' and args and metin(args[0]).upper().startswith(ORTAM_YASAK):
         raise PermissionError('kehanet araç ortamını değiştiremez')  # G-167
     if olay in ('open', 'os.listdir', 'os.scandir', 'os.chdir') and args and canli_mi(args[0]):
-        raise PermissionError('kehanet canlı depoyu okuyamaz; depo girdisi kapı ağacında göreli yolla okunur')
+        raise PermissionError(CANLI_DEPO_KORUMA_HATASI)
     if olay == 'open' and len(args) > 2 and isinstance(args[2], int):
         if type(args[0]) is int and isci_izin(args) and yardimci_cagrisi_mi():
             return
@@ -1006,7 +1126,7 @@ def denetle(olay, args):
             parcalar = [(p, cwd) for x in komut[1:] if isinstance(x, (str, bytes, os.PathLike))
                         for p in [metin(x)] + metin(x).replace(':', '=').split('=')[1:] if p]
         if any(canli_mi(x, taban) for x, taban in parcalar) or (cwd is not None and canli_mi(cwd)):
-            raise PermissionError('kehanet canlı depoyu okuyamaz; depo girdisi kapı ağacında göreli yolla okunur')
+            raise PermissionError(CANLI_DEPO_KORUMA_HATASI)
 IZINLI = set(os.environ.get('ORVANT_KEHANET_ARACLARI', '').split(','))
 """ + _ISCI_KORUMA + isci_ayar + """
 ISCI_KOD = isci_calistir.__code__
@@ -1086,7 +1206,8 @@ class Kehanet:
         self._sozlesme_yol_uyarilari = {}
         self.calisma = Path(calisma).resolve()
         self.yurutucu = yurutucu
-        self.iz_yolu = iz_yolu
+        from orvant_op.iz import oturum_iz_yolu
+        self.iz_yolu = oturum_iz_yolu(self.calisma, iz_yolu)
         self._sozlesme_uyarilari = {}
         self.zaman_asimi = zaman_asimi
         self._uretim_cagrilari = 0

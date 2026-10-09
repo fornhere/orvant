@@ -2,6 +2,9 @@
 import argparse
 import json
 import shlex
+from contextlib import nullcontext
+
+from orvant_op import iz
 
 from .durum import Mimar, _oku, _yaz
 from .kehanet import Kehanet, kehanet_gecersiz_mi, kehanet_dayanak_degisti, kehanet_yolu
@@ -36,6 +39,7 @@ def parser_kur():
     kabul.add_argument("--komut")
     kabul.add_argument("--onay-olay", required=True)
     kabul.add_argument("gerekce")
+    kabul.add_argument("--dakika", type=float)
     tekrar = sub.add_parser("yeniden-planla")
     tekrar.add_argument("calisma")
     tekrar.add_argument("neden")
@@ -55,6 +59,7 @@ def parser_kur():
     izin_yol.add_argument("istek_id")
     izin_yol.add_argument("yol")
     izin_yol.add_argument("metin")
+    izin_yol.add_argument("--dakika", type=float)
     karar_kanit = sub.add_parser("karar-kanit")
     karar_kanit.add_argument("calisma")
     karar_kanit.add_argument("karar_id")
@@ -157,50 +162,72 @@ def main(argv=None):
     args = parser_kur().parse_args(argv)
     mimar = Mimar(args.calisma)
     try:
-        if args.eylem == "proje-kaydi":
-            from .proje_kaydi import aktar
-            sonuc = aktar(args.calisma, args.kok, kuru=args.kuru)
-        elif args.eylem == "plan":
-            sonuc = mimar.planla(depo=args.depo, yeni_taslak=args.yeni_taslak)
-        elif args.eylem == "envanter":
-            sonuc = mimar.envanter(skill_dizinleri=args.skill_dizinleri)
-        elif args.eylem == "kehanet":
-            if args.denetle and args.referans:
-                raise ValueError("--denetle ile --referans birlikte kullanılamaz")
-            if args.denetle and args.yeniden:
-                raise ValueError("--denetle ile --yeniden birlikte kullanılamaz")
-            sonuc = (kehanet_denetle(args.calisma, args.gorev) if args.denetle else
-                     kehanet_hazirla(args.calisma, args.gorev, yeniden=args.yeniden, referans=args.referans))
-        elif args.eylem == "kabul-degistir":
-            sonuc = mimar.kabul_degistir(args.gorev, args.kabul_id, beklenen=args.beklenen,
-                                         komut=args.komut, onay_olay_id=args.onay_olay,
-                                         gerekce=args.gerekce)
-        elif args.eylem == "yeniden-planla":
-            sonuc = mimar.yeniden_planla(args.neden, gorev=args.gorev,
-                                          teshis_dosyasi=args.teshis_dosyasi)
-        elif args.eylem == "yetki":
-            yol = mimar.kok / "yetki_onerilen_yollar.json"
-            oneriler = _oku(yol) if yol.exists() else {}
-            for istek in mimar.yetkiler():
-                print(f"## {istek['id']} · {istek['eylem']}\n{istek['ayrinti']}\nNeden: {istek['gerekce']}\nBu kapsam için izin veriyor musunuz?\n")
-                if oneriler.get(istek["id"]):
-                    print("Önerilen izin yolları: " + " ".join(
-                        "--yol " + shlex.quote(yol) for yol in oneriler[istek["id"]]))
-            return 0
-        elif args.eylem == "izin":
-            sonuc = mimar.izin(args.istek_id, args.metin, karar=args.karar, dakika=args.dakika, yollar=args.yol)
-        elif args.eylem == "izin-yol":
-            sonuc = mimar.izin_yol(args.istek_id, args.yol, args.metin)
-        elif args.eylem == "karar-kanit":
-            sonuc = mimar.karar_kanit(args.karar_id, args.gorev, args.ozet)
-        elif args.eylem == "karar":
-            sonuc = mimar.karar(args.karar_id, args.metin, dakika=args.dakika,
-                                 yer_tutucu_kabul=args.yer_tutucu_kabul)
-        elif args.eylem == "girdi":
-            sonuc = mimar.girdi(args.baslik, args.deger, dakika=args.dakika, gorev=args.gorev,
-                                 yer_tutucu_kabul=args.yer_tutucu_kabul)
-        else:
-            sonuc = mimar.oku()
+        kullanici_komutu = args.eylem in ("izin", "izin-yol", "karar", "girdi", "kabul-degistir")
+        baglam = nullcontext()
+        if kullanici_komutu:
+            acilis = None
+            if args.eylem in ("izin", "izin-yol"):
+                kayit = next((k for k in mimar.oku().get("yetki_istekleri", [])
+                              if k["id"] == args.istek_id), {})
+                acilis = (kayit.get("acilis_t") or kayit.get("t") or
+                          iz.acilis_zamani(args.calisma, ("yetki_istendi",), soru=args.istek_id))
+            elif args.eylem == "karar":
+                try:
+                    kararlar = mimar.kararlar()
+                except FileNotFoundError:
+                    # Plan öncesi depo sorusunda henüz sözleşme/kararlar yoktur.
+                    kararlar = []
+                kayit = next((k for k in kararlar if k["id"] == args.karar_id), {})
+                acilis = (kayit.get("acilis_t") or kayit.get("t") or
+                          iz.acilis_zamani(args.calisma, ("depo_karari_istendi",), soru=args.karar_id))
+            args.dakika, bekleme = iz.insan_suresi(args.dakika, acilis=acilis)
+            baglam = iz.insan_suresi_baglami(args.dakika, bekleme, calisma=args.calisma,
+                                                  olay_turu="kabul_olcutu_degisti" if args.eylem == "kabul-degistir" else None)
+        with baglam:
+            if args.eylem == "proje-kaydi":
+                from .proje_kaydi import aktar
+                sonuc = aktar(args.calisma, args.kok, kuru=args.kuru)
+            elif args.eylem == "plan":
+                sonuc = mimar.planla(depo=args.depo, yeni_taslak=args.yeni_taslak)
+            elif args.eylem == "envanter":
+                sonuc = mimar.envanter(skill_dizinleri=args.skill_dizinleri)
+            elif args.eylem == "kehanet":
+                if args.denetle and args.referans:
+                    raise ValueError("--denetle ile --referans birlikte kullanılamaz")
+                if args.denetle and args.yeniden:
+                    raise ValueError("--denetle ile --yeniden birlikte kullanılamaz")
+                sonuc = (kehanet_denetle(args.calisma, args.gorev) if args.denetle else
+                         kehanet_hazirla(args.calisma, args.gorev, yeniden=args.yeniden, referans=args.referans))
+            elif args.eylem == "kabul-degistir":
+                sonuc = mimar.kabul_degistir(args.gorev, args.kabul_id, beklenen=args.beklenen,
+                                             komut=args.komut, onay_olay_id=args.onay_olay,
+                                             gerekce=args.gerekce)
+            elif args.eylem == "yeniden-planla":
+                sonuc = mimar.yeniden_planla(args.neden, gorev=args.gorev,
+                                              teshis_dosyasi=args.teshis_dosyasi)
+            elif args.eylem == "yetki":
+                yol = mimar.kok / "yetki_onerilen_yollar.json"
+                oneriler = _oku(yol) if yol.exists() else {}
+                for istek in mimar.yetkiler():
+                    print(f"## {istek['id']} · {istek['eylem']}\n{istek['ayrinti']}\nNeden: {istek['gerekce']}\nBu kapsam için izin veriyor musunuz?\n")
+                    if oneriler.get(istek["id"]):
+                        print("Önerilen izin yolları: " + " ".join(
+                            "--yol " + shlex.quote(yol) for yol in oneriler[istek["id"]]))
+                return 0
+            elif args.eylem == "izin":
+                sonuc = mimar.izin(args.istek_id, args.metin, karar=args.karar, dakika=args.dakika, yollar=args.yol)
+            elif args.eylem == "izin-yol":
+                sonuc = mimar.izin_yol(args.istek_id, args.yol, args.metin)
+            elif args.eylem == "karar-kanit":
+                sonuc = mimar.karar_kanit(args.karar_id, args.gorev, args.ozet)
+            elif args.eylem == "karar":
+                sonuc = mimar.karar(args.karar_id, args.metin, dakika=args.dakika,
+                                     yer_tutucu_kabul=args.yer_tutucu_kabul)
+            elif args.eylem == "girdi":
+                sonuc = mimar.girdi(args.baslik, args.deger, dakika=args.dakika, gorev=args.gorev,
+                                     yer_tutucu_kabul=args.yer_tutucu_kabul)
+            else:
+                sonuc = mimar.oku()
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         parser_kur().exit(1, f"Hata: {exc}\n")
     print(json.dumps(sonuc, ensure_ascii=False, indent=2))

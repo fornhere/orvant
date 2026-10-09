@@ -323,7 +323,7 @@ def uygula(agac, varyant):
 
 
 def negatif_kontrol(sonuc):
-    from .kehanet import IZINLI_ARACLAR
+    from .kehanet import CANLI_DEPO_KORUMA_HATASI, IZINLI_ARACLAR
     if sonuc.get("gecti") is True:
         return {"durum": "atlandi", "neden": None, "kanit": []}
     kontroller = sonuc.get("kontroller") or []
@@ -336,6 +336,8 @@ def negatif_kontrol(sonuc):
         "IndentationError", "NameError", "kehanet dosya yazamaz", "kehanet ağ veya sistem komutu kullanamaz",
         "kehanet dosya değiştiremez", "kehanet yalnız salt okunur araç çağırabilir",
         "kehanet araç çıktısını dosyaya yazamaz", "command not found", "executable not found") if iz in metin]
+    if CANLI_DEPO_KORUMA_HATASI in metin:
+        izler.append(CANLI_DEPO_KORUMA_HATASI)
     izler.extend(es[0] for es in re.finditer(
         r"No such file or directory: ['\"](?:[^'\"]*/)?(?:" + "|".join(IZINLI_ARACLAR) + r")['\"]", metin))
     if sonuc.get("hata"):
@@ -415,6 +417,9 @@ def girdiler_sha256(girdiler):
     # Yalnız yol listesi değil içerik de bağlanır; aynı adla değişen girdi önbelleği bozar.
     kayitlar = []
     for ham in girdiler:
+        if isinstance(ham, dict):
+            kayitlar.append(ham)
+            continue
         p = Path(ham)
         yollar = [p, *sorted(p.rglob("*"))] if p.is_dir() else [p]
         kayitlar.append([(str(y), "dizin" if y.is_dir() else _dosya_sha(y)) for y in yollar])

@@ -32,12 +32,13 @@ def kabul_metinleri(veri):
                 normal(p) for p in parcalar if isinstance(p, str) and p.strip())
 
     for k in veri["gorev"].get("kabul", []):
-        ekle(k.get("id"), k.get("beklenen"))
-        ekle(k.get("sozlesme_kabul_id"), k.get("beklenen"))
+        ekle(k.get("id"), k.get("beklenen"), k.get("rubrik"))
+        ekle(k.get("sozlesme_kabul_id"), k.get("beklenen"), k.get("rubrik"))
     for k in veri.get("kabul_olcutleri", []):
-        ekle(k.get("id"), k.get("metin"), k.get("kehanet"))
+        ekle(k.get("id"), k.get("metin"), k.get("kehanet"), k.get("rubrik"))
     for d in veri.get("kullanici_onayli_kabul_degisiklikleri", []):
-        ekle(d.get("kabul_id"), (d.get("yeni") or {}).get("beklenen"))
+        ekle(d.get("kabul_id"), (d.get("yeni") or {}).get("beklenen"),
+             (d.get("yeni") or {}).get("rubrik"))
     return {k: v for k, v in metinler.items() if v}
 
 

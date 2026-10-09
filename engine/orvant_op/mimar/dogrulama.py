@@ -10,6 +10,7 @@ from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 
+
 def kalip_eslesir(yol, kalip):
     """Yürütücünün bileşen bazlı yazılabilir kalıp sözleşmesi."""
     if not kalip or kalip.startswith("/") or ".." in PurePosixPath(kalip).parts:
@@ -366,6 +367,7 @@ def dogrula(plan, sozlesme, kararlar):
         raise ValueError("kapsanmayan kabul gerekçesiz")
     if (bagli & set(dis_ids)) or (bagli | set(dis_ids)) != kabul_ids:
         raise ValueError("sözleşme kabulü kapsanmamış veya çakışmış")
+    # Gereksinim kapsamı RET değildir; kaynak_denetle matris ve uyarı olarak raporlar.
     bulgular = kabul_bagimliliklari(plan)
     if bulgular["hatalar"]:
         raise ValueError(_kabul_hatasi(bulgular))

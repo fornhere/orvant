@@ -17,6 +17,7 @@ from .dogrulama import (dogrula, durumlari_hesapla, kabul_bagimliliklari,
                        kabul_bagimliliklarini_duzelt)
 from . import arac_yetki, girdi_bagi
 from .roller import plan_cikar, kaynak_denetle, iddia_bulgulari
+from .kapsam import kapsam_matrisi
 from orvant_op.karsilama.kaynaklar import depo_kaynaklari
 from .yeniden_planlama import rol_cagir as plan_duzelt_cagir, uygula as plan_duzelt_uygula
 from orvant_op.butce import agir_hesap, butce_tabani, ilgili_envanter
@@ -100,7 +101,8 @@ class Mimar:
         self.calisma = Path(calisma).resolve()
         self.kok = self.calisma / "plan"
         self.yurutucu = yurutucu
-        self.iz_yolu = iz_yolu
+        from orvant_op.iz import oturum_iz_yolu
+        self.iz_yolu = oturum_iz_yolu(self.calisma, iz_yolu)
 
     def _olay(self, tur, *, metin=None, veri=None, is_turu="is_bolme", sonuc="ok",
               aktor="orvant", dakika=None):
@@ -109,9 +111,9 @@ class Mimar:
                  "tur": tur, "aktor": aktor, "metin": metin, "veri": veri or {}}
         with (self.kok / "olaylar.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
-        kaydet(self.iz_yolu, self.calisma.name, is_turu, aktor_tur=aktor,
+        kaydet(self.iz_yolu, self.calisma.name, is_turu, calisma=self.calisma, aktor_tur=aktor,
                kimlik="mimar" if aktor == "orvant" else "kullanici", sonuc=sonuc,
-               ozet=tur, maliyet={"insan_dakika": dakika}, ham={"olay_id": entry["id"]},
+               ozet=tur, maliyet={"insan_dakika": dakika}, ham={"olay_id": entry["id"], "olay_turu": entry["tur"]},
                gorev=(veri or {}).get("gorev"))
         return entry
 
@@ -350,7 +352,8 @@ class Mimar:
                 if json.loads(satir).get("teshis_ref", {}).get("makbuz") == ref["makbuz"]:
                     raise ValueError("bu olay için yeniden planlama zaten yapıldı")
         girdi = {"plan": plan, "gorev_durumlari": {g["id"]: g["durum"] for g in plan["gorevler"]},
-                 "teshisler": teshisler[-3:], "neden": neden, "gorev": gorev}
+                 "teshisler": teshisler[-3:], "neden": neden, "gorev": gorev,
+                 "kararlar": self.kararlar()}
         envanter_yolu = self.kok / "envanter.json"
         envanter = _oku(envanter_yolu) if envanter_yolu.exists() else None
         if envanter is not None:
@@ -507,6 +510,45 @@ class Mimar:
                    "neden": str(hata), "taslak": str(taslak_yolu)}, is_turu="hedef_netlestirme")
         return {"durum": "karar_bekliyor", "karar": karar, "taslak": str(taslak_yolu)}
 
+    def _kapsam_engellerini_bagla(self, plan, matris, kararlar):
+        """Yalnız kişisel veri kapsamındaki açık kararları üretime bağlar."""
+        acik = matris["acik_kararlar"]
+        veri_satirlari = [s for s in matris["satirlar"]
+                         if s["veri_yasam_dongusu"]["kisisel_veri"]]
+        veri_kararlari = {kid for s in veri_satirlari for kid in s["karar_ids"]}
+        veri_kararlari.update(k["id"] for k in acik)
+        engeller = [kid for kid in matris["engeller"] if kid in veri_kararlari]
+        if not engeller:
+            return
+        harita = {k["id"]: k for k in kararlar}
+        # Saklama/silme politikası tek kullanıcı sorusu; tüm ilgili işler aynı cevabı bekler.
+        ortak = next((k for k in acik if k["id"] in harita), acik[0] if acik else None)
+        ortak_id = ortak["id"] if ortak else None
+        if ortak and ortak_id not in harita:
+            kararlar.append(dict(ortak, deger=None, kaynak=None,
+                                baslik="Kişisel veriler ne kadar saklanmalı ve nasıl silinmeli?"))
+        kapsamlar = []
+        for kid in engeller:
+            gereksinimler = {k["gereksinim_id"] for k in acik if k["id"] == kid}
+            karar_id = ortak_id if gereksinimler and kid not in harita else kid
+            satirlar = [s for s in veri_satirlari
+                        if (gereksinimler and s["gereksinim_id"] in gereksinimler)
+                        or (not gereksinimler and kid in s["karar_ids"])]
+            gids = {g for s in satirlar for g in s["plan_gorev_ids"]}
+            proje_duzeyi = not satirlar or any(not s["plan_gorev_ids"] for s in satirlar)
+            if proje_duzeyi:
+                gids = {g["id"] for g in plan["gorevler"]}
+            for gorev in plan["gorevler"]:
+                if gorev["id"] in gids and karar_id not in gorev["bekleyen_kararlar"]:
+                    gorev["bekleyen_kararlar"].append(karar_id)
+            kapsamlar.append({"karar_id": karar_id, "gorev_ids": sorted(gids),
+                              "kapsam": "proje" if proje_duzeyi else "gorev"})
+        matris["engel_kapsamlari"] = kapsamlar
+        if any(k["kapsam"] == "proje" for k in kapsamlar):
+            uyari = "Proje düzeyi karar bekliyor: doğrudan görev bağı yok; yeni üretim bekletildi."
+            matris["uyarilar"].append(uyari)
+            self._olay("kaynak_denetimi_uyarisi", veri={"uyari": uyari}, is_turu="dogrulama")
+
     def planla(self, *, depo=None, yeni_taslak=False):
         if (self.kok / "plan.json").exists():
             raise ValueError("plan zaten var; mevcut yetki kararları korunmalı")
@@ -532,7 +574,7 @@ class Mimar:
         if envanter is not None:
             girdi["envanter"] = arac_yetki.envanter_ozeti(envanter)
         girdi_sha = hashlib.sha256(json.dumps(
-            {k: v for k, v in girdi.items() if k != "depo_tercihi"},
+            girdi,
             ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         taslak_koku = self.kok / "taslaklar"
         taslak_koku.mkdir(parents=True, exist_ok=True)
@@ -548,7 +590,8 @@ class Mimar:
                     bulgular = iddia_bulgulari(girdi, kayit["plan"])
                     if bulgular:
                         denetim = copy.deepcopy(kayit.get("kaynak_denetimi") or
-                                               {"incelenen_kaynaklar": [], "bulgular": []})
+                                               {"incelenen_kaynaklar": [], "bulgular": [],
+                                                "sinirlar": []})
                         denetim["bulgular"].extend(b for b in bulgular if b not in denetim["bulgular"])
                         kayit.update(durum="dogrulama_hatasi", kaynak_denetimi=denetim,
                                      hata="plan kaynak tutarsızlığı: " + "; ".join(bulgular))
@@ -597,6 +640,9 @@ class Mimar:
                 denetim = kaynak_denetle(girdi, plan, calisma=self.calisma,
                     iz_yolu=self.iz_yolu, yurutucu=self.yurutucu)
                 if denetim is not None:
+                    for sinir in denetim.pop("sinir_bulguya_tasinanlar", []):
+                        self._olay("sinir_bulguya_tasindi", veri={"sinir": sinir},
+                                   is_turu="dogrulama", sonuc="ret")
                     taslak["kaynak_denetimi"] = denetim
                     taslak["iddia_denetimi_surumu"] = 1
                     for uyari in denetim.get("uyarilar", []):
@@ -635,7 +681,12 @@ class Mimar:
             _git("-c", "user.name=Orvant", "-c", "user.email=orvant@local.invalid",
                  "commit", "--allow-empty", "-m", "Initial empty commit", cwd=yol)
         plan["depo"]["yol"] = str(yol)
-        durumlari_hesapla(plan)
+        # Eski taslaklar da güncel kapsam denetiminden geçer; önbellek engeli atlayamaz.
+        matris = kapsam_matrisi(sozlesme, plan, kararlar)
+        kararlar = copy.deepcopy(kararlar)
+        self._kapsam_engellerini_bagla(plan, matris, kararlar)
+        taslak.setdefault("kaynak_denetimi", {})["kapsam"] = matris
+        durumlari_hesapla(plan, {k["id"] for k in kararlar if k.get("durum") == "cozuldu"})
         self.kok.mkdir(parents=True, exist_ok=True)
         _yaz(self.kok / "plan.json", plan)
         _yaz(self.kok / "plan_surumu.json", {"surum": 1})

@@ -14,10 +14,18 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "sinirlar": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^doğrulanamadı: [^\\r\\n]+$"
+      }
     }
   },
   "required": [
     "incelenen_kaynaklar",
-    "bulgular"
+    "bulgular",
+    "sinirlar"
   ]
 }
