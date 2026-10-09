@@ -48,6 +48,7 @@ içe aktarmaz; böylece her katman (orvant_gelisim.kayit dahil) döngüsüz kull
 Çağrı yerleri bu modülden çalışma anında çözülür.
 """
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -76,6 +77,10 @@ class AyarHatasi(ValueError):
     """Ayar dosyası veya değeri geçersiz."""
 
 
+class YurutucuSecimHatasi(AyarHatasi):
+    """Otomatik algılama tek bir yerel yürütücü seçemedi."""
+
+
 def _metin(deger, ad):
     if not isinstance(deger, str) or not deger.strip() or any(c.isspace() for c in deger):
         raise AyarHatasi(f"{ad} boşluksuz, boş olmayan metin olmalı: {deger!r}")
@@ -90,7 +95,7 @@ def _oku(yol):
         raise AyarHatasi(f"ayar dosyası okunamadı: {yol}: {exc}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise AyarHatasi(f"ayar dosyası geçersiz TOML: {yol}: {exc}") from exc
-    for bolum in ("modeller", "codex", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon", "olcer", "kat"):
+    for bolum in ("modeller", "codex", "codex_cloud", "claude", "yurutucu", "kehanet", "yollar", "karsilama", "koordinasyon", "olcer", "kat", "inceleme"):
         if bolum in veri and not isinstance(veri[bolum], dict):
             raise AyarHatasi(f"{yol}: [{bolum}] tablo olmalı")
     return veri
@@ -186,7 +191,7 @@ def codex_ikili(baslangic=None):
     return codex_ikili_kaynakli(baslangic)[0]
 
 
-YURUTUCU_TURLERI = ("codex", "claude")
+YURUTUCU_TURLERI = ("codex", "claude", "codex-cloud")
 CLAUDE_IKILI = "claude"
 
 
@@ -206,8 +211,9 @@ def yurutucu_turu_kaynakli(baslangic=None):
             if len(bulunan) == 1:
                 return bulunan[0], f"algilandi:{bulunan[0]}"
             if bulunan:
-                raise AyarHatasi(f"iki yürütücü bulundu: {secim}")
-            raise AyarHatasi(f"yürütücü bulunamadı (codex/claude PATH'te veya ayarlı ikili yolunda yok): {secim}")
+                raise YurutucuSecimHatasi(f"iki yürütücü bulundu: {secim}")
+            raise YurutucuSecimHatasi(
+                f"yürütücü bulunamadı (codex/claude PATH'te veya ayarlı ikili yolunda yok): {secim}")
         kaynak = str(dosya)
     if deger not in YURUTUCU_TURLERI:
         raise AyarHatasi(f"{kaynak}: yürütücü türü {YURUTUCU_TURLERI} içinden olmalı: {deger!r}")
@@ -217,6 +223,45 @@ def yurutucu_turu_kaynakli(baslangic=None):
 def yurutucu_turu(baslangic=None):
     """Açıkça seçilmiş veya otomatik algılanmış ``codex``/``claude``."""
     return yurutucu_turu_kaynakli(baslangic)[0]
+
+
+def codex_cloud_ayarlari(baslangic=None):
+    """Bulut işçisi için doğrulanmış ortam, taban dal ve boş-diff geri düşüşü."""
+    ortam = os.environ.get("ORVANT_CODEX_CLOUD_ORTAM")
+    if ortam:
+        ortam = _metin(ortam, "ORVANT_CODEX_CLOUD_ORTAM")
+    else:
+        ortam, dosya = _dosyadan("codex_cloud", "ortam", baslangic)
+        if ortam is not None:
+            ortam = _metin(ortam, f"{dosya} [codex_cloud].ortam")
+    dal, dosya = _dosyadan("codex_cloud", "dal", baslangic)
+    uzak, uzak_dosya = _dosyadan("codex_cloud", "uzak", baslangic)
+    alt_dizin, alt_dosya = _dosyadan("codex_cloud", "alt_dizin", baslangic)
+    attempts, attempts_dosya = _dosyadan("codex_cloud", "attempts", baslangic)
+    yoklama, yoklama_dosya = _dosyadan("codex_cloud", "yoklama_saniye", baslangic)
+    geri, geri_dosya = _dosyadan("codex_cloud", "geri_dusus", baslangic)
+    dal = _metin(dal, f"{dosya} [codex_cloud].dal") if dal is not None else "main"
+    uzak = _metin(uzak, f"{uzak_dosya} [codex_cloud].uzak") if uzak is not None else "origin"
+    if alt_dizin is None:
+        alt_dizin = ""
+    elif not isinstance(alt_dizin, str) or Path(alt_dizin).is_absolute() or ".." in Path(alt_dizin).parts:
+        raise AyarHatasi(f"{alt_dosya} [codex_cloud].alt_dizin güvenli göreli yol olmalı")
+    if attempts is None:
+        attempts = 1
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+        raise AyarHatasi(f"{attempts_dosya} [codex_cloud].attempts pozitif tamsayı olmalı")
+    if yoklama is None:
+        yoklama = 30
+    if (type(yoklama) not in (int, float) or not math.isfinite(yoklama)
+            or yoklama <= 0):
+        raise AyarHatasi(f"{yoklama_dosya} [codex_cloud].yoklama_saniye pozitif sayı olmalı")
+    geri = _metin(geri, f"{geri_dosya} [codex_cloud].geri_dusus") if geri is not None else None
+    if geri not in (None, "codex"):
+        raise AyarHatasi("[codex_cloud].geri_dusus yalnız 'codex' olabilir")
+    if not ortam:
+        raise AyarHatasi("codex-cloud için [codex_cloud].ortam veya ORVANT_CODEX_CLOUD_ORTAM gerekli")
+    return {"ortam": ortam, "dal": dal, "uzak": uzak, "alt_dizin": alt_dizin.strip("/"),
+            "attempts": attempts, "yoklama_saniye": yoklama, "geri_dusus": geri}
 
 
 def kehanet_yalitimi(baslangic=None):
@@ -265,6 +310,16 @@ def arastirma_konu_siniri(baslangic=None):
             deger = 3
     if type(deger) is not int or deger < 1:
         raise AyarHatasi("araştırma konu sınırı pozitif tam sayı olmalı")
+    return deger
+
+
+def inceleme_bekleyen_siniri(baslangic=None):
+    """Yeni üretim sınırı: [inceleme].bekleyen_sinir; varsayılan 2, 0 kapatır."""
+    deger, _ = _dosyadan("inceleme", "bekleyen_sinir", baslangic)
+    if deger is None:
+        return 2
+    if type(deger) is not int or deger < 0:
+        raise AyarHatasi("[inceleme].bekleyen_sinir negatif olmayan tam sayı olmalı")
     return deger
 
 

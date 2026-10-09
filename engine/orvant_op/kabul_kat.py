@@ -114,6 +114,17 @@ def _beklenen_dogrula(islem, beklenen):
         try:
             derlenmis = re.compile(beklenen)
             from re import _constants, _parser
+            def alternasyon_var(dugumler):
+                for tur, deger in dugumler:
+                    if tur is _constants.BRANCH:
+                        return True
+                    if tur is _constants.SUBPATTERN and alternasyon_var(deger[-1]):
+                        return True
+                    if tur in (_constants.MAX_REPEAT, _constants.MIN_REPEAT):
+                        if alternasyon_var(deger[2]):
+                            return True
+                return False
+
             def riskli(dugumler, *, derinlik=0, niceleyici_icinde=False):
                 onceki_sinirsiz = False
                 for tur, deger in dugumler:
@@ -122,6 +133,11 @@ def _beklenen_dogrula(islem, beklenen):
                     if tur in (_constants.MAX_REPEAT, _constants.MIN_REPEAT):
                         alt, ust, govde = deger
                         sinirsiz = ust == _constants.MAXREPEAT
+                        # ``sre_parse`` güvenle karakter sınıfına indirdiklerini IN
+                        # yapar. Geriye kalan BRANCH, niceleyici altında belirsiz
+                        # bölüşüm yaratır; ``?`` dahil fail-closed reddedilir.
+                        if alternasyon_var(govde):
+                            return True
                         # Sınırsız tekrar tek bir atom/sınıf üzerinde kalabilir. Art
                         # arda, grup üzerinde veya başka tekrar içinde kullanılamaz.
                         if (niceleyici_icinde or (sinirsiz and (onceki_sinirsiz

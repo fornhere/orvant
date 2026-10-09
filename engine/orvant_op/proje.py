@@ -787,6 +787,9 @@ def _prepare(session, config_path, *, graph, staging, conflict_override):
                                "calculated_budget_floor": floor,
                                "execution_inputs": execution_inputs, "config": item, "dependencies": unresolved,
                                "cakismalar": cakismalar, "worktree_kesisimleri": worktree}
+        if shape["definition"].get("acceptance_rules"):
+            records[item["id"]]["kat_state"] = {
+                key: raw[key] for key in ("ontology", "objects", "relations")}
         plan_tasks.append(plan_task)
     plan = {"surum": 1, "sozlesme_revizyon": raw["revision"],
             "depo": {"yol": str(execution), "gerekce": "Approved ontology task projection; not a new S1 intake"},
@@ -943,6 +946,11 @@ def approve(session, digest, reason):
         state.update(authorized=True, approval_digest=digest, approval_reason=reason)
         _write(Path(session) / STATE, state)
         (Path(session) / PAUSE).unlink(missing_ok=True)
+        from .yurutme import Yurutme
+        from .iz import insan_suresi_verisi
+        Yurutme(session)._olay("proje_onaylandi", None, is_turu="yetki_karari",
+                              aktor="kullanici", digest=digest, gerekce=reason,
+                              **insan_suresi_verisi())
     return status(session)
 
 
@@ -1033,7 +1041,7 @@ def model_result(session, task_id, goal):
     matching[-1]["goal"] = goal
     _write(Path(session) / STATE, state)
     tokens = goal.get("tokens_used")
-    if goal.get("status") != "complete" or type(tokens) is not int or tokens < 0:
+    if goal.get("status") not in ("complete", "bulut_tamamlandi") or type(tokens) is not int or tokens < 0:
         return ["project worker needs a complete goal with measured token usage"]
     if tokens > binding["contract"]["policy"]["token_per_attempt"]:
         return ["worker exceeded approved token budget"]
@@ -1078,7 +1086,7 @@ def _command(command, cwd, timeout, *, session):
     argv, gerekce = komut_argv(command)
     if gerekce:
         from .iz import kaydet
-        kaydet(None, Path(session).name, "dogrulama", ozet=gerekce,
+        kaydet(None, Path(session).name, "dogrulama", calisma=session, yasak_kokler=(cwd,), ozet=gerekce,
                ham={"command": command, "kabuk_gerekcesi": gerekce})
     try:
         ortam = execution_environment(session)
@@ -1087,7 +1095,7 @@ def _command(command, cwd, timeout, *, session):
         except OSError as exc:
             argv, gerekce = kabuk_geri_dususu(exc, argv, command)
             from .iz import kaydet
-            kaydet(None, Path(session).name, "dogrulama", ozet=gerekce,
+            kaydet(None, Path(session).name, "dogrulama", calisma=session, yasak_kokler=(cwd,), ozet=gerekce,
                    ham={"command": command, "kabuk_gerekcesi": gerekce})
             result = grup_run(argv, shell=False, cwd=cwd, timeout=timeout, env=ortam, input="")
     except (FileNotFoundError, PermissionError) as exc:
@@ -1195,6 +1203,7 @@ def sync(session, task_id):
     report = {"kind": "native-engine-acceptance", "task": task_id, "handoff_digest": binding["digest"],
               "native_receipt": receipt, "execution_commit": head, "publication": progress["publication"],
               "worker_runs": [c for c in state["runs"] if c["task"] == task_id]}
+    report["kabul_ozeti"] = receipt.get("kabul_ozeti")
     _write(_file(root, record["config"]["report"]), report)
     current = next(t for t in _project(root, "context", "--json")["tasks"] if t["id"] == task_id)
     if current["effective_status"] == "done":
@@ -1292,7 +1301,9 @@ def run(session, *, execute=False, worker=None, goals_db=None):
                 if pending_sync:
                     results.append(sync(session, pending_sync["id"]))
                     continue
-                candidate = next((t for t in plan["gorevler"] if t["durum"] == "hazir"), None)
+                held = executor._inceleme_freni(plan, duyur=True)
+                candidate = next((t for t in plan["gorevler"] if t["durum"] == "hazir"
+                                  and t["id"] not in held), None)
                 if candidate is None:
                     break
                 state = _read(Path(session) / STATE)
@@ -1343,8 +1354,10 @@ def retry(session, task_id, reason):
         task["durum"] = "hazir"
         _write(Path(session) / "plan/plan.json", plan)
         executor = Yurutme(session)
-        executor._olay("proje_yeniden_dene", task_id, is_turu="yeniden_is_kapsami",
-                       gerekce=reason, teshis_sinifi=diagnosis["sinif"], digest=binding["digest"])
+        from .iz import insan_suresi_verisi
+        executor._olay("proje_yeniden_dene", task_id, is_turu="yeniden_is_kapsami", aktor="kullanici",
+                       gerekce=reason, teshis_sinifi=diagnosis["sinif"], digest=binding["digest"],
+                       **insan_suresi_verisi())
         with (Path(session) / "yurutme/engeller.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"gorev": task_id, "durum": "cozuldu", "neden": reason,
                                      "t": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False) + "\n")
@@ -1375,6 +1388,7 @@ def main(argv=None):
     approval.add_argument("session")
     approval.add_argument("--digest", required=True)
     approval.add_argument("--reason", required=True)
+    approval.add_argument("--dakika", type=float)
     runner = commands.add_parser("surdur")
     runner.add_argument("session")
     runner.add_argument("--execute", action="store_true", help="Explicitly permit approved paid worker calls")
@@ -1382,6 +1396,7 @@ def main(argv=None):
     retry_parser.add_argument("session")
     retry_parser.add_argument("--gorev", required=True)
     retry_parser.add_argument("--neden", required=True)
+    retry_parser.add_argument("--dakika", type=float)
     synchronizer = commands.add_parser("esitle")
     synchronizer.add_argument("session")
     synchronizer.add_argument("task")
@@ -1397,11 +1412,16 @@ def main(argv=None):
         elif args.command == "dogrula":
             result = verify(args.root, tasks=args.gorev, maximum=args.max, execute=args.calistir)
         elif args.command == "onayla":
-            result = approve(args.session, args.digest, args.reason)
+            from .iz import insan_suresi, insan_suresi_baglami
+            with insan_suresi_baglami(*insan_suresi(args.dakika), calisma=args.session):
+                result = approve(args.session, args.digest, args.reason)
         elif args.command == "surdur":
             result = run(args.session, execute=args.execute)
         elif args.command == "yeniden-dene":
-            result = retry(args.session, args.gorev, args.neden)
+            from .iz import insan_suresi, insan_suresi_baglami, acilis_zamani
+            acilis = acilis_zamani(args.session, ("engel",), gorev=args.gorev)
+            with insan_suresi_baglami(*insan_suresi(args.dakika, acilis), calisma=args.session):
+                result = retry(args.session, args.gorev, args.neden)
         elif args.command == "esitle":
             with _lock(args.session):
                 result = sync(args.session, args.task)

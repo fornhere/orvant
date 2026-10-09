@@ -148,6 +148,26 @@ def harcamalar(calisma):
     return toplam
 
 
+def bulut_harcamalari(iz_yolu):
+    """Token üretmese de bulut işlerini sayı ve duvar süresiyle bütçe kanıtına al."""
+    toplam = {"gorev_sayisi": 0, "saniye": 0.0}
+    yol = Path(iz_yolu)
+    yollar = sorted(yol.glob("*.jsonl")) if yol.is_dir() else [yol]
+    for aday in yollar:
+        for kayit in satirlar(aday):
+            ham = kayit.get("ham") or {}
+            if kayit.get("is_turu") != "isci_kosusu" or "bulut_gorev_sayisi" not in ham:
+                continue
+            toplam["gorev_sayisi"] += max(0, int(ham.get("bulut_gorev_sayisi") or 0))
+            # Yeni kayıtta yalnız gönderim→READY duvar süresi vardır. Eski izler
+            # toplam yürütücü süresiyle geriye uyumlu kalır.
+            saniye = ham.get("bulut_sure_sn")
+            if saniye is None:
+                saniye = (kayit.get("maliyet") or {}).get("saniye")
+            toplam["saniye"] += max(0.0, float(saniye or 0))
+    return toplam
+
+
 def aktif_rezervasyonlar(calisma):
     """Ölü yerel PID rezervasyonu tutmaz; yaşayan PID için temkinli davranır.
 
