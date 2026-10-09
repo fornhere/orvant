@@ -204,6 +204,8 @@ def gecerli_bekleme(s, plan, kararlar, yetkiler):
                    for k in etkin), "Karantina kaldırıldı"
     if tur == "geri_alma":
         return any(g["durum"] == "kabul" for g in dogrudan), "Kabul geri alma koşulu"
+    if tur == "cikti_konumu":
+        return any(not g.get("yazilabilir") for g in dogrudan), "Çıktı konumu belirlendi"
     if not any(g["durum"] in BEKLEYEN for g in dogrudan):
         return False, "Doğrudan görevlerin hiçbiri artık beklemiyor"
     uyumlu = TUR_DURUMLARI.get(tur)

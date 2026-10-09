@@ -52,7 +52,8 @@ class Operator:
                  skill_dizinleri=None, path=None, yurut_zaman_asimi=3600, kehanet_zaman_asimi=1500):
         self.calisma = Path(calisma).resolve()
         self.kok = self.calisma / "operator"
-        self.iz_yolu = iz_yolu
+        from orvant_op.iz import oturum_iz_yolu
+        self.iz_yolu = oturum_iz_yolu(self.calisma, iz_yolu)
         if yurut_zaman_asimi <= 0 or kehanet_zaman_asimi <= 0:
             raise ValueError("Zaman aşımı sınırları pozitif olmalı")
         self.yurut_zaman_asimi = yurut_zaman_asimi
@@ -72,7 +73,7 @@ class Operator:
         self.son_kota = {"used_percent": None, "dosya": None}
 
     def _iz(self, tur, ozet, gorev=None, *, sonuc="ok", ham=None):
-        kaydet(self.iz_yolu, self.calisma.name, tur, aktor_tur="orvant", kimlik="operator",
+        kaydet(self.iz_yolu, self.calisma.name, tur, calisma=self.calisma, aktor_tur="orvant", kimlik="operator",
                gorev=gorev, ozet=ozet, sonuc=sonuc, ham=ham)
 
     def _kota(self):
@@ -119,6 +120,12 @@ class Operator:
                               ("belirsizlik", "belirsizlik")) if alan in karar) or None)
             anahtar = karar["id"]
             metin = (karar.get("soru") or {}).get("metin") or karar.get("baslik") or "Kararınızı belirtin."
+            if teshis.get("sinif") == "urun_karari_eksik":
+                baslik = _kisa(karar.get("baslik") or "ürün kararı", 100).rstrip(".?!")
+                secenekler = baglam["secenekler"]
+                secim = " veya ".join(_kisa(s, 60).rstrip(".?!") for s in secenekler)
+                metin = (f"{karar['id']}: {baslik} — {secim} seçeneklerinden hangisi?"
+                         if secim else f"{karar['id']}: {baslik} için kararınız nedir?")
         elif tur == "girdi":
             # Teşhis ve bağımsız bekleme gözlemi tek açık girdiye dönüşür.
             anahtar = "girdi"
@@ -154,6 +161,22 @@ class Operator:
             komut = self._komut("mimar", "kabul-degistir", self.calisma, gorev["id"],
                                 "--kabul-id", "<kabul_id>", "--beklenen", "<beklenen>",
                                 "--onay-olay", "<onay_olay_id>", "<gerekçe>")
+        elif tur == "cikti_konumu":
+            anahtar = "cikti_konumu"
+            metin = (f"{gorev['id']} codex-cloud ile çalıştırılmadan önce çıktı konumu belirlenmeli. "
+                     "Görev yeniden planlansın mı?")
+            baglam.update(secenekler=["çıktı konumunu belirleyip yeniden planla", "görevi beklet"],
+                          risk="Çıktı konumu olmadan bulut işçisinin değişiklikleri teslim alınamaz.")
+        elif tur == "uzlastir":
+            kimlik = teshis.get("bulut_gorev_id") or "<bulut_gorev_id>"
+            durum_komutu = teshis.get("uzlastirma_komutu") or f"codex cloud status {kimlik}"
+            acma_komutu = self._komut("yurut", "uzlastir", self.calisma, gorev["id"],
+                                      "--sonuc", "<uygulandi|uygulanmadi>")
+            metin = metin or (f"{gorev['id']} yürütmesinin sonucu bilinmiyor. Bulut görevini kontrol edip "
+                              "sonucu uzlaştırdıktan sonra görevi açmak ister misiniz?")
+            komut = durum_komutu + " && " + acma_komutu
+            baglam.update(secenekler=["bulut sonucunu doğrula ve görevi aç", "görevi beklet"],
+                          risk="Uzlaştırmadan açmak aynı işi ikinci kez çalıştırabilir.")
         elif tur == "yukselt" and "mimar kehanet" in (komut or ""):
             metin = metin or (f"{gorev['id']} kehanet denetiminde durdu ({_kisa(neden, 120)}); işçi koşmadı. "
                               "Kehanet referansla yeniden üretilip görev açılsın mı, yoksa sözleşme mi gözden geçirilsin?")
@@ -252,13 +275,21 @@ class Operator:
                 adim = "yukselt"
                 neden += "; bu makbuz için yeniden planlama zaten yapıldı"
         eylem = {"adim": adim, "gorev": gorev["id"], "neden": neden, "teshis": kayit}
-        if adim in ("girdi_bekle", "yetki_bekle", "yukselt"):
-            tur = {"girdi_bekle": "girdi", "yetki_bekle": "yetki", "yukselt": "yukselt"}[adim]
+        if adim in ("girdi_bekle", "yetki_bekle", "yukselt", "uzlastir"):
+            tur = {"girdi_bekle": "girdi", "yetki_bekle": "yetki", "yukselt": "yukselt",
+                   "uzlastir": "uzlastir"}[adim]
+            karar = None
+            if kayit.get("sinif") == "urun_karari_eksik":
+                karar = next((k for k in self.mimar.kararlar()
+                              if k["id"] == kayit.get("karar_id")), None)
+                if karar:
+                    tur = "karar"
             if adim == "yukselt" and kayit.get("sinif") == "kabul_celiskisi":
                 tur = "kabul_celiskisi"
             istek = next((y for y in plan["yetki_istekleri"]
                           if y["id"] in gorev["yetki_istek_ids"] and y["durum"] == "acik"), None)
-            eylem.update(adim="soru", soru=self._soru(gorev, tur, neden, teshis=kayit, istek=istek))
+            eylem.update(adim="soru", soru=self._soru(
+                gorev, tur, neden, teshis=kayit, karar=karar, istek=istek))
         return eylem
 
     def _kehanet_gerekli(self, gorev):
@@ -367,6 +398,32 @@ class Operator:
         hazirlanacak.update(a["gorev"] for a in yeniden if a["eylem"] == "yeniden_dene")
         adaylar = [g for g in plan["gorevler"] if g["id"] not in bekletilenler
                    and (g["durum"] == "hazir" or g["id"] in hazirlanacak)]
+        try:
+            yurutucu_turu = ayarlar.yurutucu_turu(self.calisma)
+        except ayarlar.YurutucuSecimHatasi:
+            # Ön kontrol yürütücü seçimi değildir. Seçim yoksa/belirsizse yerel
+            # akışın önceki davranışını koru; asıl yürütme katmanı gerekirse
+            # kendi açık ayar hatasını üretir.
+            yurutucu_turu = None
+        if yurutucu_turu == "codex-cloud":
+            konumsuz = [g for g in adaylar if not g["yazilabilir"]]
+            eylemler += [{"adim": "engel", "gorev": g["id"],
+                          "sinif": "cikti_konumu_eksik",
+                          "neden": "çıktı konumu/yazılabilir yol eksik; codex-cloud görevi başlatılmadı"}
+                         for g in konumsuz]
+            eylemler += [{"adim": "not", "gorev": g["id"],
+                          "neden": ("çıktı konumu/yazılabilir yol eksik; mimar yeniden-planla "
+                                    "veya karar ile konum belirleyin")}
+                         for g in konumsuz]
+            for gorev in konumsuz:
+                neden = "çıktı konumu/yazılabilir yol eksik; codex-cloud görevi başlatılmadı"
+                komut = self._komut("mimar", "yeniden-planla", self.calisma,
+                                    f"{gorev['id']} çıktı konumu: <yazılabilir yol>",
+                                    "--gorev", gorev["id"])
+                soru = self._soru(gorev, "cikti_konumu", neden, komut=komut)
+                eylemler.append({"adim": "soru", "gorev": gorev["id"],
+                                 "neden": neden, "soru": soru})
+            adaylar = [g for g in adaylar if g["yazilabilir"]]
         kabul_gecersizler = [g for g in plan["gorevler"] if g["durum"] == "kabul"
                             and g["id"] not in bekletilenler and kehanet_gecersiz_mi(self.calisma, g["id"])]
         for gorev in [*adaylar, *kabul_gecersizler]:
@@ -567,6 +624,10 @@ class Operator:
         elif adim == "kosu":
             self._iz("baslatma_izleme", "İşçi koşusu başlatma kararı", kimlik)
             return self.yurutme.yurut(en_fazla=1)
+        elif adim == "engel":
+            self.yurutme._olay("operator_on_kontrol_engeli", kimlik,
+                               neden=eylem["neden"], sinif=eylem.get("sinif"))
+            return {"durum": "bu_tur_atlandi", "sinif": eylem.get("sinif"), "neden": eylem["neden"]}
         elif adim == "not":
             if eylem["neden"] not in self.uyarilar:
                 self.uyarilar.append(eylem["neden"])
@@ -583,6 +644,32 @@ class Operator:
                 json.dumps(self.yurutme.denetim_isaretleri(), sort_keys=True),
                 tuple(sorted(s["id"] for s in self.sorular.acik())))
 
+    def _inceleme_freni_kaydi(self):
+        """İnceleme freninin açılış/kapanışını kalıcı ve dönem başına tekil kaydet."""
+        plan = self.yurutme._plan()
+        bekletilen = self.yurutme._inceleme_freni(plan)
+        olaylar = satirlar(self.calisma / "yurutme/olaylar.jsonl")
+        gecisler = [o for o in olaylar if o.get("tur") in
+                    ("uretim_durdu_inceleme", "uretim_freni_kalkti_inceleme")]
+        etkin_kayitli = bool(gecisler and gecisler[-1]["tur"] == "uretim_durdu_inceleme")
+        if bekletilen:
+            # Aynı Yurutme örneğinin izinli düzeltme koşusu bu dönemi yeniden duyurmasın.
+            self.yurutme._inceleme_duyurusu = True
+            if not etkin_kayitli:
+                sinir = ayarlar.inceleme_bekleyen_siniri(self.calisma)
+                bekleyen = [g["id"] for g in plan["gorevler"]
+                            if g["durum"] == "inceleme_bekliyor"]
+                self.yurutme._olay("uretim_durdu_inceleme", None, bekleyen=bekleyen,
+                                   sinir=sinir, bekletilen=list(bekletilen))
+            return {"bekleyen": [g["id"] for g in plan["gorevler"]
+                                  if g["durum"] == "inceleme_bekliyor"],
+                    "sinir": ayarlar.inceleme_bekleyen_siniri(self.calisma),
+                    "bekletilen": list(bekletilen)}
+        self.yurutme._inceleme_duyurusu = None
+        if etkin_kayitli:
+            self.yurutme._olay("uretim_freni_kalkti_inceleme", None)
+        return None
+
     def surdur(self, *, en_fazla_tur=5, tur_basina_kosu=3, kuru=False):
         from orvant_op import proje
         if proje.load(self.calisma):
@@ -591,6 +678,13 @@ class Operator:
             raise ValueError("Tur ve koşu sınırları pozitif olmalı")
         self.kehanet_denendi = set()
         self.uyarilar = []
+        plan = self.yurutme._plan()
+        checkpointler = [g for g in plan["gorevler"] if g["durum"] == "kota_bekleniyor"]
+        if checkpointler:
+            for gorev in checkpointler:
+                gorev["durum"] = "hazir"
+            if not kuru:
+                self.yurutme._kaydet_plan(plan)
         if kuru:
             eylemler = self.tur_plani()
             return {"kuru": True, "eylemler": eylemler, "kota": kota_oku(self.oturum_dizini),
@@ -603,6 +697,7 @@ class Operator:
             tur = {"tur": numara, "eylemler": [], "durum": None}
             turlar.append(tur)
             self._iz("baslatma_izleme", f"Tur {numara} başladı")
+            inceleme_freni = self._inceleme_freni_kaydi()
 
             def calistir(eylem):
                 kayit = {**eylem}
@@ -644,6 +739,10 @@ class Operator:
                     if self._kehanet_gerekli(self._gorev(adaylar[0]["gorev"])):
                         break
                     calistir(adaylar[0])
+                    inceleme_freni = self._inceleme_freni_kaydi()
+                    if self._gorev(adaylar[0]["gorev"])["durum"] == "kota_bekleniyor":
+                        bitis = "kota_bekleniyor"
+                        break
                 self._kota()
             except YurutucuZamanAsimi as exc:
                 bitis = "zaman_asimi"
@@ -654,6 +753,7 @@ class Operator:
                 tur["hata"] = str(exc)
                 self._iz("baslatma_izleme", f"Tur hatası: {exc}", sonuc="hata")
             if bitis == "zaman_asimi":
+                inceleme_freni = self._inceleme_freni_kaydi()
                 for e in self.tur_plani():
                     if e["adim"] == "soru":
                         calistir(e)
@@ -666,6 +766,7 @@ class Operator:
             for e in self.tur_plani():
                 if e["adim"] == "soru":
                     calistir(e)
+            inceleme_freni = self._inceleme_freni_kaydi()
             for s in self.sorular.kapanacaklar(self.yurutme._plan(), self.mimar.kararlar()):
                 calistir({"adim": "soru_kapat", "gorev": s["gorev"],
                           "neden": s.get("kapanis_nedeni", "Bekleme koşulu kalktı"), "soru": s})
@@ -674,7 +775,7 @@ class Operator:
             if (all(d == "kabul" for _, d in sonra[0]) and not self.yurutme.denetim_isaretleri()
                     and not any(kehanet_gecersiz_mi(self.calisma, g) for g, _ in sonra[0])):
                 bitis = "tamamlandi"
-            elif bitis != "kota" and (sonra == once or not tur["eylemler"] or
+            elif bitis not in ("kota", "kota_bekleniyor") and (sonra == once or not tur["eylemler"] or
                                         (sonra[:-1] == once[:-1] and not any(
                                             e["adim"] in ("kosu", "yeniden_degerlendir", "yeniden_dene", "yeniden_denetle", "etki_denetimi", "yeniden_planla", "serbest")
                                             for e in tur["eylemler"]))):
@@ -689,7 +790,11 @@ class Operator:
         self._iz("baslatma_izleme", f"Sürdürme bitti: {bitis}")
         sonuc = {"bitis_nedeni": bitis, "turlar": turlar, "gorevler": dict(self._imza()[0]),
                  "acik_sorular": self.sorular.acik(), "kota": self.son_kota, "uyarilar": self.uyarilar,
+                 "inceleme_freni": self._inceleme_freni_kaydi(),
                  "kapanan_sorular": [s for s in self.sorular.oku() if s.get("kapanis_t") and s["kapanis_t"] >= baslangic]}
+        if bitis == "kota_bekleniyor":
+            sonuc.update(durum="kota_bekleniyor",
+                         sonraki_adim=f"kota yenilenince orvant operator surdur {self.calisma}")
         atomik_yaz(self.kok / "rapor.md", rapor_metni(sonuc))
         self._iz("raporlama", "Operatör raporu yazıldı")
         return sonuc
@@ -789,6 +894,11 @@ def rapor_metni(sonuc):
                       paket_metni(sonuc.get("soru_onizleme", []))])
         return "\n".join(satir)
     satir = ["# Operatör raporu", ""]
+    if sonuc.get("inceleme_freni"):
+        fren = sonuc["inceleme_freni"]
+        satir += ["## İnceleme sınırı", "",
+                  f"- Bekleyen: {', '.join(fren['bekleyen'])}; sınır: {fren['sinir']}; "
+                  f"bekletilen: {', '.join(fren['bekletilen'])}", ""]
     for tur in sonuc["turlar"]:
         satir += [f"## Tur {tur['tur']}", ""]
         for e in tur["eylemler"]:
