@@ -8,13 +8,14 @@ from math import ceil
 from orvant_op.mimar.kusurlu import negatif_kontrol
 
 SINIFLAR = (
-    "butce_modeli", "plan_sozlesmesi", "sozlesme_anlami", "yasam_dongusu", "baglam_eksik", "kurulum",
+    "kota_doldu", "butce_modeli", "plan_sozlesmesi", "sozlesme_anlami", "yasam_dongusu", "baglam_eksik", "kurulum",
     "ortam_gozlem", "arac_eksik", "kabul_celiskisi", "girdi_bekleme", "kod_hatasi", "gecici_altyapi",
-    "dogrulayici_kusuru", "orvant_kusuru", "gecici_artik", "isci_goal_kapanmadi", "bilinmeyen",
+    "dogrulayici_kusuru", "orvant_kusuru", "gecici_artik", "isci_goal_kapanmadi", "bulut_bos_dondu", "bilinmeyen",
+    "urun_karari_eksik", "flaky_test", "outcome_unknown",
 )
 EYLEMLER = (
     "yeniden_denetle", "yeniden_dene", "yeniden_planla", "girdi_bekle",
-    "yetki_bekle", "yukselt",
+    "yetki_bekle", "kota_bekle", "yukselt", "uzlastir",
 )
 
 
@@ -113,9 +114,33 @@ def teshis_et(baglam):
     kapi_ortami = manifest.get("kapi_ortami") or {}
     ortam_farki = (gozlem_ortami.get("ortam") and kapi_ortami.get("ortam")
                    and gozlem_ortami.get("ortam") != kapi_ortami.get("ortam"))
-    if (baglam.get("isci_kostu") is False
+    acik_kararlar = [k for k in baglam.get("kararlar") or []
+                     if k.get("durum") != "cozuldu" and k.get("sahip", "kullanici") == "kullanici"]
+    bekleyen_kararlar = set(gorev.get("bekleyen_kararlar") or [])
+    girdi_istegi = _var(ozet, "girdi", "dosya gerekli", "input required", "provide")
+    urun_karari = next((k for k in acik_kararlar if not girdi_istegi and (
+        k.get("id") in bekleyen_kararlar
+        or (k.get("id") and re.search(
+            rf"(?<![\w-]){re.escape(str(k['id']).casefold())}(?![\w-])", ozet)))), None)
+    goal = makbuz.get("goal") or {}
+    kosu = baglam.get("kosu") or {}
+    kararsiz_kontroller = [x for x in makbuz.get("kapi_tekrarlari") or []
+                           if len(set(x.get("sonuc_dizisi") or [])) > 1]
+    if makbuz.get("outcome_unknown") is True and bool(
+            makbuz.get("bulut_gorev_id") or makbuz.get("bulut_gorev_url")):
+        sinif, eylem, hipotez = ("outcome_unknown", "uzlastir",
+                                  "Yürütücü sonucu kesinleşmeden aynı görev ve deneme yeniden başlatılamaz")
+    elif makbuz.get("kota_doldu") is True or goal.get("status") == "usage_limited" or kosu.get("kota_doldu") is True:
+        sinif, eylem, hipotez = "kota_doldu", "kota_bekle", "Model sağlayıcısı kullanım kotası doldu"
+    elif kararsiz_kontroller:
+        sinif, eylem = "flaky_test", "yukselt"
+        hipotez = "Aynı ağaç ve kapı komutunda karışık sonuç: " + ", ".join(
+            str(x.get("id") or x.get("komut")) for x in kararsiz_kontroller)
+    elif (baglam.get("isci_kostu") is False
             and _var(ozet, "workspace setup failed", "çalışma alanı kurulumu başarısız")):
         sinif, eylem, hipotez = "kurulum", "yeniden_dene", "Kurulum komutu işçi başlamadan başarısız oldu"
+    elif _var(ozet, "bulut_bos_dondu", "bulut boş döndü"):
+        sinif, eylem, hipotez = "bulut_bos_dondu", "yeniden_dene", "Codex Cloud READY durumunda değişiklik üretmedi"
     elif _var(ozet, "claude code oturumu geçersiz", "codex oturumu geçersiz"):
         sinif, eylem, hipotez = "ortam_gozlem", "yetki_bekle", "Model CLI kimlik doğrulaması veya oturumu geçersiz"
     elif (baglam.get("istisna") and baglam.get("isci_kostu") is False
@@ -176,11 +201,15 @@ def teshis_et(baglam):
                                       "asr aracı", "whisper yok", "command not found", "tool not found",
                                       "not installed", "kurulu değil")):
         sinif, eylem, hipotez = "arac_eksik", "yeniden_planla", "Araç envanteri veya kurulum yetkisi gerekli"
+    elif durum == "blocked" and urun_karari:
+        sinif, eylem, hipotez = "urun_karari_eksik", teshis_eylemi("girdi_bekleme"), "Açık ürün kararı kullanıcı seçimi bekliyor"
     elif durum == "blocked" and baglam.get("istenen_bagimli_ciktilar"):
         sinif, eylem, hipotez = "baglam_eksik", "yeniden_dene", "İstenen girdi kabul edilmiş bağımlı çıktı olarak mevcut"
     elif durum == "blocked" and _var(ozet, "kullanıcı", "girdi", "dosya gerekli", "karar gerekli", "input required", "provide"):
         sinif, eylem, hipotez = "girdi_bekleme", teshis_eylemi("girdi_bekleme"), "İşçi dış girdi beklediğini bildirdi"
-    elif _var(ozet, "rate limit", "429", "network", "connection", "timed out", "timeout", "zaman aşımı", "temporary failure") or any(k.get("zaman_asimi") for k in komutlar):
+    elif (_var(ozet, "rate limit", "network", "connection", "timed out", "timeout", "zaman aşımı", "temporary failure")
+          or re.search(r"\b(?:http|status(?: code)?)[ :#-]*429\b|\b429 too many requests\b", ozet)
+          or any(k.get("zaman_asimi") for k in komutlar)):
         sinif, eylem, hipotez = "gecici_altyapi", "yeniden_dene", "Geçici altyapı veya zaman aşımı"
     elif durum == "budget_limited":
         sinif, eylem, hipotez = "butce_modeli", "yeniden_planla", "Kümülatif token bütçesi tükendi"
@@ -205,7 +234,7 @@ def teshis_et(baglam):
         hipotez = "İşçi değişiklik yaptı ve bağımsız kapı geçti; yalnız goal kapanışı eksik"
     elif durum in ("active", "paused", "hedef_yok", "usage_limited", "okuma_hatasi", "blocked"):
         sinif, eylem, hipotez = "yasam_dongusu", "yukselt", "Goal yaşam döngüsü belirsiz veya tamamlanmadı"
-    elif durum == "complete" and negatif.get("durum") == "anlamli":
+    elif durum in ("complete", "bulut_tamamlandi") and negatif.get("durum") == "anlamli":
         # G-171 (gerçek koşu T14-2, örnek T01-1): kehanet çalıştı ve çıktıyı reddetti; red işçi istemine
         # önceki hata olarak gider. Onarım sınırları aşağıda aynen uygulanır.
         sinif, eylem = "kod_hatasi", "yeniden_dene"
@@ -263,6 +292,8 @@ def teshis_et(baglam):
         kanitlar.append({"kaynak": "s3", "alan": "isci_kostu", "deger": False})
     if baglam.get("artik_incelemesi") is not None:
         kanitlar.append({"kaynak": "s3", "alan": "artik_incelemesi", "deger": baglam["artik_incelemesi"]})
+    if sinif == "flaky_test":
+        kanitlar.append({"kaynak": "makbuz", "alan": "kapi_tekrarlari", "deger": kararsiz_kontroller})
     if sinif == "baglam_eksik" and baglam.get("istenen_bagimli_ciktilar"):
         kanitlar.append({"kaynak": "s3", "alan": "istenen_bagimli_ciktilar",
                         "deger": baglam["istenen_bagimli_ciktilar"]})
@@ -270,6 +301,8 @@ def teshis_et(baglam):
              "hipotez": hipotez, "kanitlar": kanitlar, "eylem": eylem,
              "gerekce": hipotez, "imza": imza, "kanit_ozeti": kanit_ozeti,
              "orvant_surumu": surum}
+    if sinif == "urun_karari_eksik":
+        sonuc["karar_id"] = urun_karari["id"]
     if sinif == "kurulum":
         sonuc.update(oneri="kurulum komutunu düzelt ve yeniden dene", deneme_iadesi=True)
     if sinif == "butce_modeli" and ilerleme_var:
@@ -335,6 +368,19 @@ def teshis_et(baglam):
                 break
     if sinif == "kabul_celiskisi":
         sonuc["kullanici_sorusu"] = "Kabul ölçütü tahmini kabul edecek şekilde değiştirilsin mi, yoksa gerekli ölçüm yapılsın mı?"
+    if sinif == "flaky_test":
+        sonuc["kullanici_sorusu"] = "Kararsız kapı kontrolünü inceleyin: " + ", ".join(
+            str(x.get("id") or x.get("komut")) for x in kararsiz_kontroller)
+    if sinif == "outcome_unknown":
+        ham_hata = " ".join(map(str, hatalar))
+        kimlik = next(iter(re.findall(r"bulut görevi ([\w.-]+)", ham_hata, re.I)), None) or makbuz.get("thread_id") or "bilinmiyor"
+        url = makbuz.get("bulut_gorev_url") or next(iter(re.findall(r"https?://\S+", ham_hata)), None)
+        komut = makbuz.get("uzlastirma_komutu") or f"codex cloud status {kimlik}"
+        sonuc["kullanici_sorusu"] = (f"Bulut görevi {kimlik} uzlaştırılmalı"
+            + (f" ({url.rstrip('.,;)')})" if url else "")
+            + f". Kontrol: {komut}. Sonucu doğrulayıp görevi açmak ister misiniz?")
+        sonuc.update(bulut_gorev_id=kimlik, bulut_gorev_url=url,
+                     uzlastirma_komutu=komut)
     if sinif == "gecici_altyapi" and eylem == "yeniden_dene":
         sonuc["bekleme_saniye"] = 1
     return sonuc
