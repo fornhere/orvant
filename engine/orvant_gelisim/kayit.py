@@ -32,8 +32,31 @@ SONUCLAR = {"ok", "ret", "hata", "zaman_asimi", "iptal", "bilinmiyor"}
 MALIYET = ("girdi_token", "onbellek_token", "cikti_token", "saniye", "insan_dakika")
 ALANLAR = {"id", "t", "proje", "kosu", "aktor", "katman", "is_turu", "sonuc",
            "maliyet", "orvant_surumu", "mudahale", "benzetim", "ozet", "kanit", "ham",
-           "yurutme_id", "miras"}
+           "yurutme_id", "miras", "mudahale_turu"}
 EK_ALANLAR = {"olay_kokeni"}
+MUDAHALE_TURLERI = {
+    "yetki_karari": "yetki",
+    "proje_onaylandi": "yetki",
+    "proje_yeniden_dene": "kapsam",
+    "kabul_olcutu_degisti": "kapsam",
+    "kullanici_yeni_girdi": "kapsam",
+    "yeniden_is_kapsami": "kapsam",
+    "insan_incelemesi": "inceleme",
+    "insan incelemesi gecti": "inceleme",
+    "insan incelemesi kaldi": "inceleme",
+    "*": "duzeltici",
+}
+
+
+def mudahale_turunu_bul(is_turu, ham=None, mudahale=True):
+    """Yeni ve eski izlere aynı deterministik tür eşlemesini uygula."""
+    if not mudahale:
+        return None
+    ham = ham or {}
+    for ad in (ham.get("olay_turu"), ham.get("tur"), is_turu):
+        if isinstance(ad, str) and ad in MUDAHALE_TURLERI:
+            return MUDAHALE_TURLERI[ad]
+    return MUDAHALE_TURLERI["*"]
 
 
 def _utc(value):
@@ -48,8 +71,9 @@ def _utc(value):
 
 
 def denetle(o):
-    if not isinstance(o, dict) or not ALANLAR <= set(o) or set(o) - ALANLAR - EK_ALANLAR:
-        raise ValueError(f"olay alanları: eksik={sorted(ALANLAR-set(o)) if isinstance(o, dict) else sorted(ALANLAR)}, fazla={sorted(set(o)-ALANLAR-EK_ALANLAR) if isinstance(o, dict) else []}")
+    zorunlu = ALANLAR - {"mudahale_turu"}  # Eski izler yerinde okunur.
+    if not isinstance(o, dict) or not zorunlu <= set(o) or set(o) - ALANLAR - EK_ALANLAR:
+        raise ValueError(f"olay alanları: eksik={sorted(zorunlu-set(o)) if isinstance(o, dict) else sorted(zorunlu)}, fazla={sorted(set(o)-ALANLAR-EK_ALANLAR) if isinstance(o, dict) else []}")
     if "olay_kokeni" in o and (not isinstance(o["olay_kokeni"], dict)
             or set(o["olay_kokeni"]) != {"orvant_surumu"}
             or not isinstance(o["olay_kokeni"]["orvant_surumu"], str)
@@ -85,6 +109,9 @@ def denetle(o):
     expected = o["katman"] == "operator" and a["tur"] != "orvant"
     if type(o["mudahale"]) is not bool or o["mudahale"] != expected:
         raise ValueError("mudahale hesapla uyuşmuyor")
+    if "mudahale_turu" in o and o["mudahale_turu"] != mudahale_turunu_bul(
+            o["is_turu"], o.get("ham"), o["mudahale"]):
+        raise ValueError("mudahale_turu hesapla uyuşmuyor")
     if type(o["benzetim"]) is not bool or o["benzetim"] != (a["tur"] == "kullanici_benzetim"):
         raise ValueError("benzetim aktörle uyuşmuyor")
     if not isinstance(o["ozet"], str) or not isinstance(o["kanit"], list) or not all(isinstance(x, str) for x in o["kanit"]) or not isinstance(o["ham"], dict):
@@ -135,6 +162,7 @@ def olay(*, proje, is_turu, aktor_tur=None, aktor_kimlik=None, aktor=None, katma
          "benzetim": aktor_tur == "kullanici_benzetim", "ozet": ozet,
          "kanit": list(kanit or []), "ham": dict(ham or {}),
          "yurutme_id": yurutme_id, "miras": miras}
+    o["mudahale_turu"] = mudahale_turunu_bul(is_turu, ham, o["mudahale"])
     return denetle(o)
 
 
