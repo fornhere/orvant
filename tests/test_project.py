@@ -120,6 +120,17 @@ class WorkflowTests(ProjectCase):
         self.rejected(event("cancel_task", task_id="T-DATA", allow_done=False))
         self.apply("cancel_task", task_id="T-DATA", allow_done=True)
 
+    def test_cancelled_task_issues_stay_on_task_but_not_in_warnings(self):
+        self.finish("T-DATA")
+        (self.root / "tools.json").write_text("changed", encoding="utf-8")
+        self.assertTrue(any(w.startswith("T-DATA: ") for w in self.inspection()["warnings"]))
+        self.apply("cancel_task", task_id="T-DATA", allow_done=True)
+        report = self.inspection()
+        cancelled = next(t for t in report["tasks"] if t["id"] == "T-DATA")
+        self.assertEqual(cancelled["effective_status"], "cancelled")
+        self.assertTrue(cancelled["issues"])
+        self.assertFalse([w for w in report["warnings"] if w.startswith("T-DATA: ")])
+
     def test_supersede_task_links_existing_replacement_and_excludes_old_context(self):
         self.rejected(event("supersede_task", task_id="T-DATA",
                             replacement_task_id="missing", allow_done=False))
