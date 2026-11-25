@@ -703,7 +703,10 @@ def inspect_state(state, root):
     except RecursionError as exc:
         raise ValueError("task graph exceeds supported nesting") from exc
     ready = [t["id"] for t in ordered if t["effective_status"] in {"todo", "doing", "review"}]
-    warnings = [f"{t['id']}: {issue}" for t in ordered for issue in t["issues"]
+    # A cancelled task can be neither reopened nor repaired, so its issues stay
+    # on its own entry but never turn the project-level check red.
+    warnings = [f"{t['id']}: {issue}" for t in ordered if t["status"] != "cancelled"
+                for issue in t["issues"]
                 if not issue.startswith("dependency ") or t["status"] == "done"]
     repair_actions = []
     current_by_topic = {d["topic"]: d["id"] for d in decisions.values() if d["status"] == "accepted"}
